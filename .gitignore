@@ -20,8 +20,12 @@ Thumbs.db
 *.ctxt
 
 # Mobile Tools for Java (J2ME)
-.mtj.tmp/
-
+.mtj
+.tmp/
+caches/
+daemon/
+test_log.txt
+wrapper/
 # Package Files #
 *.jar
 *.war

@@ -28,4 +28,8 @@ java {
 
 tasks.test {
     useJUnitPlatform() // Ensures compatibility with JUnit 5
+    testLogging {
+        // Show standard output and error
+        showStandardStreams = true
+    }
 }
