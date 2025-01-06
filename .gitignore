@@ -1,6 +1,18 @@
 # Compiled class file
 *.class
 
+# IntelliJ IDEA files
+.idea/
+*.iml
+
+# Build and cache directories
+build/
+.gradle/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
 # Log file
 *.log
 
