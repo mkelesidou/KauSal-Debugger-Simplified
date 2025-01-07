@@ -24,9 +24,9 @@ Thumbs.db
 .tmp/
 caches/
 daemon/
-test_log.txt
 wrapper/
 # Package Files #
+*.txt
 *.jar
 *.war
 *.nar
