@@ -3,6 +3,7 @@ package analysis;
 import java.io.*;
 import java.util.*;
 import java.util.regex.*;
+import java.util.logging.Logger;
 
 public class PredicateParser {
     private final List<LogEntry> entries = new ArrayList<>();
@@ -52,6 +53,8 @@ public class PredicateParser {
         }
     }
 
+    private static final Logger LOGGER = Logger.getLogger(PredicateParser.class.getName());
+
     public static void main(String[] args) {
 
         PredicateParser parser = new PredicateParser();
@@ -64,7 +67,7 @@ public class PredicateParser {
 
             System.out.println("Log parsing and export completed.");
         } catch (IOException e) {
-            e.printStackTrace();
+            LOGGER.severe("Error during preprocessing: " + e.getMessage());
         }
     }
 }

@@ -16,7 +16,7 @@ dependencies {
     implementation("com.github.javaparser:javaparser-core:3.25.4") // JavaParser for source code
 
     // Machine Learning (Random Forests)
-    implementation("com.github.haifengl:smile-core:2.6.0")
+    implementation("nz.ac.waikato.cms.weka:weka-stable:3.8.6")
     // Testing dependencies
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.0") // JUnit 5 for tests
 }
