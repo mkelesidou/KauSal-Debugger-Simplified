@@ -15,16 +15,21 @@ public class Logger {
     }
 
     public void record(String testTag, String predicateType, String sourceCode, boolean outcome, String variableStates) {
+        record(testTag, predicateType, sourceCode, outcome, variableStates, null);
+    }
+
+    public void record(String testTag, String predicateType, String sourceCode, boolean outcome, String variableStates, String additionalInfo) {
         try {
             String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
             String message = String.format(
-                    "[%s] Test: %s | Predicate: %s | Source: %s | Outcome: %s | Variables: %s",
+                    "[%s] Test: %s | Predicate: %s | Source: %s | Outcome: %s | Variables: %s | Info: %s",
                     timestamp,
                     testTag == null ? "unknown" : testTag,
                     predicateType == null ? "unknown" : predicateType,
                     sourceCode == null ? "unknown" : sourceCode.trim(),
                     outcome ? "true" : "false",
-                    variableStates == null ? "none" : variableStates
+                    variableStates == null ? "none" : variableStates,
+                    additionalInfo == null ? "none" : additionalInfo
             );
             writer.println(message);
             System.out.println("Writing to log: " + message);
