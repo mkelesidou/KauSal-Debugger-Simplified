@@ -24,38 +24,45 @@ public class LoggerTest {
         logger = new Logger(testLogFile);
     }
 
-    @AfterEach
-    public void teardown() throws IOException {
-        logger.close();
-        java.io.File logFile = new java.io.File(testLogFile);
-        if (logFile.exists()) {
-            boolean deleted = logFile.delete();
-            if (!deleted) {
-                System.err.println("Failed to delete log file: " + testLogFile);
-            }
-        }
-    }
+//    @AfterEach
+//    public void teardown() throws IOException {
+//        logger.close();
+//        java.io.File logFile = new java.io.File(testLogFile);
+//        if (logFile.exists()) {
+//            boolean deleted = logFile.delete();
+//            if (!deleted) {
+//                System.err.println("Failed to delete log file: " + testLogFile);
+//            }
+//        }
+//    }
 
     @Test
     public void testLoggerWritesCorrectly() throws IOException {
+        // Expected log entries based on ExampleClass1
         logger.record("LoggerTest", "if-statement", "if (x > 0)", true, "x=10");
-        logger.record("LoggerTest", "while-loop", "while (y < 10)", false, "y=15");
+        logger.record("LoggerTest", "for-loop", "for (int i = 0; i < x; i++)", true, "variables=unknown");
 
+        // Debug: Print the actual log entries
         try (BufferedReader reader = new BufferedReader(new FileReader(testLogFile))) {
             String firstLine = reader.readLine();
             String secondLine = reader.readLine();
 
+            System.out.println("Actual log entry 1: " + firstLine);
+            System.out.println("Actual log entry 2: " + secondLine);
+
+            // Assertions for the first log entry
             assertTrue(firstLine.contains("Test: LoggerTest"));
             assertTrue(firstLine.contains("Predicate: if-statement"));
             assertTrue(firstLine.contains("Source: if (x > 0)"));
             assertTrue(firstLine.contains("Outcome: true"));
             assertTrue(firstLine.contains("Variables: x=10"));
 
+            // Assertions for the second log entry
             assertTrue(secondLine.contains("Test: LoggerTest"));
-            assertTrue(secondLine.contains("Predicate: while-loop"));
-            assertTrue(secondLine.contains("Source: while (y < 10)"));
-            assertTrue(secondLine.contains("Outcome: false"));
-            assertTrue(secondLine.contains("Variables: y=15"));
+            assertTrue(secondLine.contains("Predicate: for-loop"));
+            assertTrue(secondLine.contains("Source: for (int i = 0; i < x; i++)"));
+            assertTrue(secondLine.contains("Outcome: true"));
+            assertTrue(secondLine.contains("Variables: variables=unknown"));
         }
     }
 
@@ -63,8 +70,14 @@ public class LoggerTest {
     public void testLoggerHandlesNullValues() throws IOException {
         logger.record(null, null, null, false, null);
 
+        System.out.println("Expected log entry:");
+        System.out.println("[Timestamp] Test: unknown | Predicate: unknown | Source: unknown | Outcome: false | Variables: none | Info: none");
+
         try (BufferedReader reader = new BufferedReader(new FileReader(testLogFile))) {
             String line = reader.readLine();
+
+            System.out.println("Actual log entry:");
+            System.out.println(line);
 
             assertTrue(line.contains("Test: unknown"));
             assertTrue(line.contains("Predicate: unknown"));
@@ -78,8 +91,14 @@ public class LoggerTest {
     public void testLoggerWithAdditionalInfo() throws IOException {
         logger.record("LoggerTest", "if-statement", "if (x > 0)", true, "x=10", "LineNumber=5");
 
+        System.out.println("Expected log entry:");
+        System.out.println("[Timestamp] Test: LoggerTest | Predicate: if-statement | Source: if (x > 0) | Outcome: true | Variables: x=10 | Info: LineNumber=5");
+
         try (BufferedReader reader = new BufferedReader(new FileReader(testLogFile))) {
             String line = reader.readLine();
+
+            System.out.println("Actual log entry:");
+            System.out.println(line);
 
             assertTrue(line.contains("Test: LoggerTest"));
             assertTrue(line.contains("Predicate: if-statement"));
