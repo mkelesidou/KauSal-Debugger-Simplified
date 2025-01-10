@@ -24,17 +24,17 @@ public class LoggerTest {
         logger = new Logger(testLogFile);
     }
 
-//    @AfterEach
-//    public void teardown() throws IOException {
-//        logger.close();
-//        java.io.File logFile = new java.io.File(testLogFile);
-//        if (logFile.exists()) {
-//            boolean deleted = logFile.delete();
-//            if (!deleted) {
-//                System.err.println("Failed to delete log file: " + testLogFile);
-//            }
-//        }
-//    }
+    @AfterEach
+    public void teardown() throws IOException {
+        logger.close();
+        java.io.File logFile = new java.io.File(testLogFile);
+        if (logFile.exists()) {
+            boolean deleted = logFile.delete();
+            if (!deleted) {
+                System.err.println("Failed to delete log file: " + testLogFile);
+            }
+        }
+    }
 
     @Test
     public void testLoggerWritesCorrectly() throws IOException {
