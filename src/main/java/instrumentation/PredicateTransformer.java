@@ -24,18 +24,35 @@ public class PredicateTransformer {
         for (String line : lines) {
             line = line.trim();
 
-            // Check for 'if' or 'while' predicates
-            if (line.startsWith("if (") || line.startsWith("while (")) {
+            // Handle if, while, and do-while predicates
+            if (line.startsWith("if (") || line.startsWith("while (") || line.startsWith("do {")) {
                 Matcher matcher = conditionPattern.matcher(line);
                 if (matcher.find()) {
                     String condition = matcher.group(1); // Extract condition inside parentheses
-                    String predicateType = line.startsWith("if (") ? "if-statement" : "while-loop";
+                    String predicateType = line.startsWith("if (") ? "if-statement" :
+                            line.startsWith("while (") ? "while-loop" : "do-while-loop";
                     processCondition(predicateType, condition, line);
                 }
                 predicates.add(line.startsWith("if (") ? "if-statement" : "while-loop");
-            } else if (line.startsWith("for (")) { // Check for 'for' predicates
+            }
+            // Handle for loops
+            else if (line.startsWith("for (")) {
                 logger.record("PredicateTransformerTest", "for-loop", line, true, "variables=unknown");
                 predicates.add("for-loop");
+            }
+            // Handle ternary operators
+            else if (line.contains("?") && line.contains(":")) {
+                logger.record("PredicateTransformerTest", "ternary-operator", line, true, "condition=unknown");
+                predicates.add("ternary-operator");
+            }
+            // Handle assertions
+            else if (line.startsWith("assert ")) {
+                Matcher matcher = conditionPattern.matcher(line);
+                if (matcher.find()) {
+                    String condition = matcher.group(1);
+                    processCondition("assert-statement", condition, line);
+                }
+                predicates.add("assert-statement");
             }
         }
         return predicates;
@@ -60,5 +77,4 @@ public class PredicateTransformer {
         String[] parts = condition.split("[><=!]");
         return parts.length > 0 ? parts[0].trim() : "unknown";
     }
-
 }

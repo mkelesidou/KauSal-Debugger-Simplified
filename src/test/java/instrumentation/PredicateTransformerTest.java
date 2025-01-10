@@ -30,33 +30,37 @@ public class PredicateTransformerTest {
     }
 
     @Test
-    public void testPredicateTransformerWithExampleClass2() throws IOException {
+    public void testPredicateTransformerWithExample1() throws IOException {
         PredicateTransformer transformer = new PredicateTransformer(logger);
 
+        // Path to Example1 source code
         String exampleClass1Path = Paths.get("src/main/java/examples/Example1.java").toAbsolutePath().toString();
+        String exampleClass1Code = Files.readString(Paths.get(exampleClass1Path));
 
-        // Read the file using BufferedReader
-        StringBuilder sourceCodeBuilder = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new FileReader(exampleClass1Path))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sourceCodeBuilder.append(line).append("\n");
-            }
-        }
-        String exampleClass1Code = sourceCodeBuilder.toString();
+        // Find predicates in Example1
         List<String> predicates = transformer.findPredicate(exampleClass1Code);
 
-        // Assertions based on ExampleClass1's expected predicates
-        assertEquals(2, predicates.size()); // Adjust based on the actual logic in ExampleClass1
-        assertTrue(predicates.contains("if-statement")); // ExampleClass1 should have an 'if-statement'
-        assertTrue(predicates.contains("for-loop")); // ExampleClass1 should have a 'for-loop'
+        // Assertions based on Example1's logic
+        // Example1 contains:
+        // 1. 'if-statement' for "if (x > 0)"
+        // 2. 'for-loop' for "for (int i = 0; i < x; i++)"
+        // 3. 'if-statement' for "if (i % 2 == 0)"
+        assertEquals(3, predicates.size()); // 2 'if-statements' + 1 'for-loop'
+        assertTrue(predicates.contains("if-statement")); // Check for 'if'
+        assertTrue(predicates.contains("for-loop")); // Check for 'for'
 
-        // Assertions based on ExampleClass2's expected predicates
-//        assertEquals(1, predicates.size()); // Adjust based on the actual logic in ExampleClass2
-//        assertTrue(predicates.contains("while-loop")); // ExampleClass2 should have a 'while-loop'
+        // Verify the log file contains entries for predicates in Example1
+        List<String> logEntries = Files.readAllLines(Paths.get(testLogFile));
+        assertTrue(logEntries.size() > 0); // Ensure the log file is not empty
 
+        // Optionally print the predicates and log entries for debugging
+        System.out.println("Predicates found in Example1:");
+        predicates.forEach(System.out::println);
 
-        // Print a message indicating success
+        System.out.println("Log file entries:");
+        logEntries.forEach(System.out::println);
+
         System.out.println("Log file successfully generated for Example1.");
     }
+
 }
