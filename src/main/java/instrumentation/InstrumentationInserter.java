@@ -3,6 +3,7 @@ package instrumentation;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.NodeList;
+import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.AssignExpr;
 import com.github.javaparser.ast.expr.ConditionalExpr;
@@ -17,74 +18,172 @@ import com.github.javaparser.ast.stmt.Statement;
 import com.github.javaparser.ast.type.PrimitiveType;
 import com.github.javaparser.ast.visitor.ModifierVisitor;
 import com.github.javaparser.ast.visitor.Visitable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.FileWriter;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * InstrumentationInserter modifies a Java source file by:
+ * 1) Forcing the final code into the 'instrumentation' package,
+ * 2) Ensuring that each assignment’s target variable is declared in the enclosing method (with default initializer 0),
+ * 3) Inserting logging calls via CollectOut immediately after each assignment,
+ * 4) Lifting conditional expressions into temporary variables (with logging),
+ * 5) Updating the main method so that input_1 is assigned from command-line arguments and the parameter is renamed to "args".
+ *
+ * This version uses hardcoded file paths.
+ */
 public class InstrumentationInserter extends ModifierVisitor<Void> {
+    private static final Logger logger = LoggerFactory.getLogger(InstrumentationInserter.class);
+
+    // Store generated temporary names to avoid collisions.
+    private final Set<String> usedNames = new HashSet<>();
 
     public static void main(String[] args) {
         try {
-            // Specify the path to the GSA-transformed source file.
             String sourcePath = "src/main/resources/transformation/gsas/transformed_simple_example.java";
-            // Read the source code.
             String sourceCode = new String(Files.readAllBytes(Paths.get(sourcePath)));
-            // Instrument the source code.
             String instrumentedSource = transformSource(sourceCode);
-            // Write the instrumented source into a new file.
-            String outputPath = "src/main/resources/instrumentation/instrumented_output.java";
+            String outputPath = "src/main/resources/instrumentation/SimpleExample.java";
             try (PrintWriter writer = new PrintWriter(new FileWriter(outputPath))) {
                 writer.println(instrumentedSource);
             }
-            System.out.println("Instrumentation complete. Instrumented file written to: " + outputPath);
+            logger.info("Instrumentation complete. Instrumented file written to: {}", outputPath);
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error("Instrumentation failed.", e);
         }
     }
 
-    // Generate unique temporary variable names.
-    private String uniqueTemp(String prefix) {
-        return prefix + "_" + UUID.randomUUID().toString().replace("-", "").substring(0, 6);
+    /**
+     * transformSource: Parse, visit, and transform the code, and update the main method.
+     * Forces the final code into the 'instrumentation' package.
+     */
+    public static String transformSource(String sourceCode) {
+        CompilationUnit cu = StaticJavaParser.parse(sourceCode);
+        // Force package to 'instrumentation'
+        cu.setPackageDeclaration("instrumentation");
+        InstrumentationInserter inserter = new InstrumentationInserter();
+        inserter.visit(cu, null);
+        // Update the main method: rename parameter to "args" if needed, and update input_1 initializer.
+        updateMainMethod(cu);
+        return cu.toString();
     }
 
     /**
-     * Instead of instrumenting assignments in visit(AssignExpr),
-     * we override visit(BlockStmt) to insert a logging call after every
-     * stand-alone assignment statement.
+     * Updates the main method so that:
+     * 1. The parameter is renamed to "args" (if it isn’t already), and
+     * 2. The declaration for input_1 is replaced with:
+     *    int input_1 = (args.length > 0) ? Integer.parseInt(args[0]) : 4;
      */
-    @Override
-    public Visitable visit(BlockStmt block, Void arg) {
-        // First, visit child nodes.
-        super.visit(block, arg);
-        NodeList<Statement> newStatements = new NodeList<>();
-        for (Statement stmt : block.getStatements()) {
-            newStatements.add(stmt);
-            // If this statement is an ExpressionStmt containing an assignment...
+    private static void updateMainMethod(CompilationUnit cu) {
+        cu.findAll(MethodDeclaration.class).stream()
+                .filter(md -> md.getNameAsString().equals("main"))
+                .forEach(md -> {
+                    // Rename the first parameter to "args" if needed.
+                    if (!md.getParameters().isEmpty() && !md.getParameter(0).getNameAsString().equals("args")) {
+                        md.getParameter(0).setName("args");
+                    }
+                    // Update input_1 initializer.
+                    md.getBody().ifPresent(body -> {
+                        for (Statement stmt : body.getStatements()) {
+                            if (stmt.isExpressionStmt() &&
+                                    stmt.asExpressionStmt().getExpression().isVariableDeclarationExpr()) {
+                                VariableDeclarationExpr vde = stmt.asExpressionStmt().getExpression().asVariableDeclarationExpr();
+                                vde.getVariables().forEach(vd -> {
+                                    if (vd.getNameAsString().equals("input_1")) {
+                                        vd.setInitializer(StaticJavaParser.parseExpression("(args.length > 0) ? Integer.parseInt(args[0]) : 4"));
+                                    }
+                                });
+                            }
+                        }
+                    });
+                });
+    }
+
+    /**
+     * Generates a unique temporary variable name with the given prefix.
+     */
+    private String uniqueTemp(String prefix) {
+        String candidate;
+        do {
+            candidate = prefix + "_" + UUID.randomUUID().toString().replace("-", "").substring(0, 6);
+        } while (usedNames.contains(candidate));
+        usedNames.add(candidate);
+        return candidate;
+    }
+
+    /**
+     * Checks if a variable with the given name is declared in the provided statements.
+     */
+    private boolean isDeclared(NodeList<Statement> statements, String varName) {
+        for (Statement stmt : statements) {
             if (stmt.isExpressionStmt()) {
                 ExpressionStmt exprStmt = stmt.asExpressionStmt();
-                Expression expr = exprStmt.getExpression();
-                if (expr.isAssignExpr()) {
-                    AssignExpr ae = expr.asAssignExpr();
-                    if (ae.getTarget().isNameExpr()) {
-                        String varName = ae.getTarget().asNameExpr().getNameAsString();
-                        // Insert a logging call after the assignment.
-                        MethodCallExpr logCall = createLogCall(varName);
-                        newStatements.add(new ExpressionStmt(logCall));
+                if (exprStmt.getExpression().isVariableDeclarationExpr()) {
+                    for (VariableDeclarator vd : exprStmt.getExpression().asVariableDeclarationExpr().getVariables()) {
+                        if (vd.getNameAsString().equals(varName)) {
+                            return true;
+                        }
                     }
                 }
             }
+        }
+        return false;
+    }
+
+    /**
+     * Inserts a declaration for varName with type int and initializer 0 at the beginning
+     * of the enclosing method body if not already declared.
+     */
+    private void ensureDeclarationInMethod(MethodDeclaration methodDecl, String varName) {
+        methodDecl.getBody().ifPresent(body -> {
+            if (!isDeclared(body.getStatements(), varName)) {
+                VariableDeclarator vd = new VariableDeclarator(StaticJavaParser.parseType("int"), varName,
+                        StaticJavaParser.parseExpression("0"));
+                VariableDeclarationExpr decl = new VariableDeclarationExpr(vd);
+                body.addStatement(0, new ExpressionStmt(decl));
+            }
+        });
+    }
+
+    /**
+     * Overrides the visit for BlockStmt to insert logging calls after each assignment.
+     */
+    @Override
+    public Visitable visit(BlockStmt block, Void arg) {
+        super.visit(block, arg);
+        NodeList<Statement> newStatements = new NodeList<>();
+        MethodDeclaration methodDecl = block.findAncestor(MethodDeclaration.class).orElse(null);
+
+        for (Statement stmt : block.getStatements()) {
+            if (stmt.isExpressionStmt() && stmt.asExpressionStmt().getExpression().isAssignExpr()) {
+                AssignExpr ae = stmt.asExpressionStmt().getExpression().asAssignExpr();
+                if (ae.getTarget().isNameExpr()) {
+                    String varName = ae.getTarget().asNameExpr().getNameAsString();
+                    if (methodDecl != null) {
+                        ensureDeclarationInMethod(methodDecl, varName);
+                    }
+                    newStatements.add(stmt);
+                    MethodCallExpr logCall = createLogCall(varName);
+                    newStatements.add(new ExpressionStmt(logCall));
+                    continue;
+                }
+            }
+            newStatements.add(stmt);
         }
         block.setStatements(newStatements);
         return block;
     }
 
     /**
-     * Instrument conditional expressions by lifting subexpressions into temporaries.
-     * (This part remains unchanged.)
+     * Overrides the visit for ConditionalExpr to lift subexpressions into temporary variables.
      */
     @Override
     public Visitable visit(ConditionalExpr ce, Void arg) {
@@ -130,20 +229,20 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
         ce.findAncestor(ExpressionStmt.class).ifPresent(exprStmt ->
                 indexHolder.set(parentBlock.getStatements().indexOf(exprStmt))
         );
-        parentBlock.addStatement(indexHolder.get(), condDecl);
+        parentBlock.addStatement(indexHolder.get(), new ExpressionStmt(condDecl));
         parentBlock.addStatement(indexHolder.get() + 1, new ExpressionStmt(logCond));
-        parentBlock.addStatement(indexHolder.get() + 2, thenDecl);
+        parentBlock.addStatement(indexHolder.get() + 2, new ExpressionStmt(thenDecl));
         parentBlock.addStatement(indexHolder.get() + 3, new ExpressionStmt(logThen));
-        parentBlock.addStatement(indexHolder.get() + 4, elseDecl);
+        parentBlock.addStatement(indexHolder.get() + 4, new ExpressionStmt(elseDecl));
         parentBlock.addStatement(indexHolder.get() + 5, new ExpressionStmt(logElse));
-        parentBlock.addStatement(indexHolder.get() + 6, resultDecl);
+        parentBlock.addStatement(indexHolder.get() + 6, new ExpressionStmt(resultDecl));
         parentBlock.addStatement(indexHolder.get() + 7, new ExpressionStmt(logResult));
 
         return new NameExpr(tempResult);
     }
 
     /**
-     * Creates a logging call expression: CollectOut.logVariable("varName", varName);
+     * Creates a logging call expression: CollectOut.logVariable("varName", varName).
      */
     private MethodCallExpr createLogCall(String varName) {
         MethodCallExpr logCall = new MethodCallExpr(new NameExpr("CollectOut"), "logVariable");
@@ -152,15 +251,5 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
         args.add(new NameExpr(varName));
         logCall.setArguments(args);
         return logCall;
-    }
-
-    /**
-     * Parses and transforms the source code.
-     */
-    public static String transformSource(String sourceCode) {
-        CompilationUnit cu = StaticJavaParser.parse(sourceCode);
-        InstrumentationInserter inserter = new InstrumentationInserter();
-        inserter.visit(cu, null);
-        return cu.toString();
     }
 }
