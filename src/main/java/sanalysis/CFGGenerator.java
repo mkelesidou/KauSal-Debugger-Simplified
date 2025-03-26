@@ -14,7 +14,6 @@ import java.util.*;
 
 public class CFGGenerator {
 
-    // --- CFG Node Class ---
     public static class CFGNode {
         private static int counter = 0;
         private final String id;
@@ -49,7 +48,7 @@ public class CFGGenerator {
         public String toString() { return id; }
     }
 
-    // --- CFG Edge Class (to avoid duplicate edges) ---
+    // CFG Edge Class (to avoid duplicate edges)
     public static class CFGEdge {
         public final CFGNode from;
         public final CFGNode to;
@@ -70,7 +69,6 @@ public class CFGGenerator {
         }
     }
 
-    // --- Control Flow Graph Class ---
     public static class ControlFlowGraph {
         private final List<CFGNode> nodes = new ArrayList<>();
         private final Set<CFGEdge> edges = new LinkedHashSet<>(); // use a set to avoid duplicates
@@ -123,7 +121,7 @@ public class CFGGenerator {
         }
     }
 
-    // --- Helper class for entry/exit of a CFG fragment ---
+    // Helper class for entry/exit of a CFG fragment
     public static class EntryExit {
         public CFGNode entry;
         public CFGNode exit;
@@ -133,7 +131,7 @@ public class CFGGenerator {
         }
     }
 
-    // --- For handling loop constructs (for break/continue) ---
+    // For handling loop constructs (for break/continue)
     private static class LoopContext {
         public CFGNode condNode;
         public CFGNode exitNode;
@@ -145,9 +143,7 @@ public class CFGGenerator {
     private Deque<LoopContext> loopStack = new ArrayDeque<>();
     private CFGNode currentMethodEnd = null;
 
-    // ------------------------------------------------------------
     // CFG Construction (using AST)
-    // ------------------------------------------------------------
     public ControlFlowGraph generateCFG(String sourcePath) {
         ControlFlowGraph cfg = new ControlFlowGraph();
         try {
@@ -228,25 +224,52 @@ public class CFGGenerator {
     }
 
     private EntryExit processIfStmt(IfStmt ifStmt, ControlFlowGraph cfg) {
+        // 1. Create the condition node
         CFGNode condNode = new CFGNode("if " + ifStmt.getCondition().toString());
         cfg.addNode(condNode);
+
+        // 2. Process the 'then' statement
         EntryExit thenEE = processStatement(ifStmt.getThenStmt(), cfg);
         cfg.addEdge(condNode, thenEE.entry);
+
+        // 3. Process the 'else' statement (if present)
         EntryExit elseEE = null;
         if (ifStmt.getElseStmt().isPresent()) {
             elseEE = processStatement(ifStmt.getElseStmt().get(), cfg);
             cfg.addEdge(condNode, elseEE.entry);
         }
+
+        // 4. Check if all branches are terminal
+        boolean thenTerminal = isTerminalNode(thenEE.exit, cfg);
+        boolean elseTerminal = elseEE != null && isTerminalNode(elseEE.exit, cfg);
+        boolean elseExists = elseEE != null;
+        
+        // If both branches exist and both are terminal, or the then branch is terminal and there is no else
+        if ((elseExists && thenTerminal && elseTerminal) || 
+            (thenTerminal && !elseExists)) {
+            // No merge node needed - both/all paths end in terminal statements
+            return new EntryExit(condNode, thenEE.exit); // Return any exit, it doesn't matter
+        }
+        
+        // 5. Otherwise, create a merge node for non-terminal paths
         CFGNode mergeNode = new CFGNode("if-merge");
         cfg.addNode(mergeNode);
-        cfg.addEdge(thenEE.exit, mergeNode);
-        if (elseEE != null) {
-            cfg.addEdge(elseEE.exit, mergeNode);
-        } else {
+        
+        // Only connect non-terminal nodes to the merge
+        if (!thenTerminal) {
+            cfg.addEdge(thenEE.exit, mergeNode);
+        }
+        
+        if (elseEE != null && !elseTerminal) {
+            cfg.addEdge(elseEE.exit, mergeNode);  
+        } else if (elseEE == null) {
+            // Connect condition false path to merge when no else branch
             cfg.addEdge(condNode, mergeNode);
         }
+        
         return new EntryExit(condNode, mergeNode);
     }
+
 
     private EntryExit processWhileStmt(WhileStmt whileStmt, ControlFlowGraph cfg) {
         CFGNode condNode = new CFGNode("while " + whileStmt.getCondition().toString());
@@ -263,18 +286,63 @@ public class CFGGenerator {
     }
 
     private EntryExit processForStmt(ForStmt forStmt, ControlFlowGraph cfg) {
-        String cond = forStmt.getCompare().isPresent() ? forStmt.getCompare().get().toString() : "";
-        CFGNode condNode = new CFGNode("for (" + cond + ")");
+        // Process initialisers (if any)
+        EntryExit initEE = null;
+        if (!forStmt.getInitialization().isEmpty()) {
+            String initStr = forStmt.getInitialization().toString();
+            CFGNode initNode = new CFGNode("for-init: " + initStr);
+            cfg.addNode(initNode);
+            initEE = new EntryExit(initNode, initNode);
+        }
+
+        // Process the condition (or default to true if missing)
+        String cond = forStmt.getCompare().isPresent() ? forStmt.getCompare().get().toString() : "true";
+        CFGNode condNode = new CFGNode("for-cond: " + cond);
         cfg.addNode(condNode);
+
+        // Process update expressions (if any)
+        EntryExit updateEE = null;
+        if (!forStmt.getUpdate().isEmpty()) {
+            String updateStr = forStmt.getUpdate().toString();
+            CFGNode updateNode = new CFGNode("for-update: " + updateStr);
+            cfg.addNode(updateNode);
+            updateEE = new EntryExit(updateNode, updateNode);
+        }
+
+        // Create an exit node for the loop
         CFGNode exitNode = new CFGNode("for-exit");
         cfg.addNode(exitNode);
+
+        // Connect initialisation to condition if initialisation exists
+        if (initEE != null) {
+            cfg.addEdge(initEE.exit, condNode);
+        }
+
+        // Push loop context for break/continue handling
         loopStack.push(new LoopContext(condNode, exitNode));
         EntryExit bodyEE = processStatement(forStmt.getBody(), cfg);
         loopStack.pop();
+
+        // From the condition, on true, go to the loop body
         cfg.addEdge(condNode, bodyEE.entry);
-        cfg.addEdge(bodyEE.exit, condNode);
+
+        // From the body exit, go to update (if any) or loop back to the condition
+        if (updateEE != null) {
+            cfg.addEdge(bodyEE.exit, updateEE.entry);
+            cfg.addEdge(updateEE.exit, condNode);
+        } else {
+            cfg.addEdge(bodyEE.exit, condNode);
+        }
+
+        // From the condition, on false, exit the loop
         cfg.addEdge(condNode, exitNode);
-        return new EntryExit(condNode, exitNode);
+
+        // Return the overall entry and exit for the loop
+        if (initEE != null) {
+            return new EntryExit(initEE.entry, exitNode);
+        } else {
+            return new EntryExit(condNode, exitNode);
+        }
     }
 
     private EntryExit processForEachStmt(ForEachStmt forEachStmt, ControlFlowGraph cfg) {
@@ -309,7 +377,16 @@ public class CFGGenerator {
         CFGNode mergeNode = new CFGNode("switch-merge");
         cfg.addNode(mergeNode);
         for (SwitchEntry entry : switchStmt.getEntries()) {
-            String label = entry.getLabels().isEmpty() ? "default:" : "case " + entry.getLabels().toString();
+            // Format case labels as "case X" without brackets for tests to pass
+            String label;
+            if (entry.getLabels().isEmpty()) {
+                label = "default:";
+            } else {
+                // Extract just the number without brackets
+                String labelText = entry.getLabels().toString();
+                labelText = labelText.replace("[", "").replace("]", "");
+                label = "case " + labelText;
+            }
             CFGNode caseNode = new CFGNode(label);
             cfg.addNode(caseNode);
             cfg.addEdge(switchNode, caseNode);
@@ -367,12 +444,27 @@ public class CFGGenerator {
         return new EntryExit(contNode, contNode);
     }
 
+    private boolean isTerminalNode(CFGNode node, ControlFlowGraph cfg) {
+        // Check the label for return/throw
+        String label = node.getLabel().trim().toLowerCase();
+        if (label.startsWith("return") || label.startsWith("throw")) {
+            return true;
+        }
+
+        // Optionally, also check outgoing edges:
+        long outEdges = cfg.getEdges().stream()
+                .filter(e -> e.from.equals(node))
+                .count();
+        return (outEdges == 0);
+    }
+
+
     public static void main(String[] args) {
-        String sourcePath = "src/main/java/examples/SimpleExample.java";
+        String sourcePath = "src/main/java/examples/BuggyExample.java";
         CFGGenerator generator = new CFGGenerator();
         ControlFlowGraph cfg = generator.generateCFG(sourcePath);
         System.out.println("Generated CFG:");
         cfg.printGraph();
-        cfg.exportToDotFile("src/main/resources/sanalysis/cfgs/cfg_simple_example.dot");
+        cfg.exportToDotFile("src/main/resources/sanalysis/cfgs/cfg_buggy_example.dot");
     }
 }
