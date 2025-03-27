@@ -4,13 +4,11 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.*;
-
-import com.github.javaparser.StaticJavaParser;
-import com.github.javaparser.ast.CompilationUnit;
-import com.github.javaparser.ast.body.MethodDeclaration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * CDGGenerator: A production-ready Control Dependence Graph (CDG) generator that leverages the CFGGenerator.
+ * CDGGenerator: A Control Dependence Graph (CDG) generator that leverages the CFGGenerator.
  *
  * Steps:
  *   1. Build the CFG using CFGGenerator.
@@ -22,6 +20,7 @@ import com.github.javaparser.ast.body.MethodDeclaration;
 public class CDGGenerator {
 
     private final CFGGenerator cfgGen = new CFGGenerator();
+    private static final Logger logger = LoggerFactory.getLogger(CDGGenerator.class);
 
     /**
      * Generates the Control Flow Graph (CFG) from the source code.
@@ -75,6 +74,11 @@ public class CDGGenerator {
      * @return a map from each node to its set of postdominators.
      */
     private static Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> computePostDominators(CFGGenerator.ControlFlowGraph subCfg) {
+        // Add validation
+        if (subCfg == null || subCfg.getNodes().isEmpty()) {
+            throw new IllegalArgumentException("Invalid CFG: Graph is null or empty");
+        }
+        
         List<CFGGenerator.CFGNode> nodes = subCfg.getNodes();
 
         // Identify the exit node: assumed to be the node whose label starts with "Method End:".
@@ -99,7 +103,7 @@ public class CDGGenerator {
             successors.get(edge.from).add(edge.to);
         }
 
-        // Initialize postdominator sets:
+        // Initialise postdominator sets:
         // For the exit node, pdom(exit) = {exit};
         // For all other nodes, pdom(n) = all nodes.
         Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> postdoms = new HashMap<>();
@@ -140,6 +144,12 @@ public class CDGGenerator {
                 }
             }
         }
+
+        // Add validation of results
+        if (postdoms == null || postdoms.isEmpty()) {
+            throw new IllegalStateException("Failed to compute postdominators");
+        }
+        
         return postdoms;
     }
 
@@ -151,6 +161,11 @@ public class CDGGenerator {
      */
     private static Map<CFGGenerator.CFGNode, CFGGenerator.CFGNode> computeImmediatePostDominators(
             Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> postdoms) {
+        // Add input validation
+        if (postdoms == null || postdoms.isEmpty()) {
+            throw new IllegalArgumentException("Invalid postdominator sets");
+        }
+        
         Map<CFGGenerator.CFGNode, CFGGenerator.CFGNode> ipdom = new HashMap<>();
         for (CFGGenerator.CFGNode node : postdoms.keySet()) {
             Set<CFGGenerator.CFGNode> postdomSet = new HashSet<>(postdoms.get(node));
@@ -174,7 +189,24 @@ public class CDGGenerator {
             }
             ipdom.put(node, immediate);
         }
+
+        // Add result validation
+        for (CFGGenerator.CFGNode node : postdoms.keySet()) {
+            if (!node.equals(getExitNode(postdoms)) && ipdom.get(node) == null) {
+                logger.warn("Node {} has no immediate postdominator", node.getId());
+            }
+        }
+        
         return ipdom;
+    }
+
+    // Add helper methods for validation
+    private static CFGGenerator.CFGNode getExitNode(Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> postdoms) {
+        return postdoms.entrySet().stream()
+            .filter(e -> e.getValue().size() == 1 && e.getValue().contains(e.getKey()))
+            .map(Map.Entry::getKey)
+            .findFirst()
+            .orElse(null);
     }
 
     /**
@@ -183,10 +215,12 @@ public class CDGGenerator {
      * @param subCfg the sub-CFG for a method.
      * @return a CDG represented as a map from a control node to its dependent nodes.
      */
-    private static Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> computeCDGForSubCFG(CFGGenerator.ControlFlowGraph subCfg) {
-        // Step 1: Compute postdominators.
+    private static Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> computeCDGForSubCFG(
+            CFGGenerator.ControlFlowGraph subCfg) {
+
+        // 1. Compute postdominators.
         Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> postdoms = computePostDominators(subCfg);
-        // Step 2: Compute immediate postdominators.
+        // 2. Compute immediate postdominators.
         Map<CFGGenerator.CFGNode, CFGGenerator.CFGNode> ipdom = computeImmediatePostDominators(postdoms);
 
         // Build a successor map for subCfg.
@@ -198,37 +232,34 @@ public class CDGGenerator {
             successors.get(edge.from).add(edge.to);
         }
 
-        // Initialize the CDG as an adjacency list.
+        // Initialise the CDG as an adjacency list (controller -> set of controlled nodes).
         Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> cdg = new HashMap<>();
         for (CFGGenerator.CFGNode node : subCfg.getNodes()) {
             cdg.put(node, new HashSet<>());
         }
 
-        // For each branch node (node with ≥2 successors), add CDG edges by following the ipdom chain.
-        for (CFGGenerator.CFGNode branchNode : subCfg.getNodes()) {
-            if (successors.get(branchNode).size() < 2)
-                continue; // Not a branch node.
-
-            for (CFGGenerator.CFGNode successor : successors.get(branchNode)) {
-                // Skip if the branch node postdominates this successor.
-                if (postdoms.get(branchNode).contains(successor))
+        // 3. For each node X that is a "branch" (≥ 2 successors):
+        for (CFGGenerator.CFGNode X : subCfg.getNodes()) {
+            if (successors.get(X).size() < 2) {
+                continue; // Not a branch node, skip.
+            }
+            // 4. For each successor Y of X:
+            for (CFGGenerator.CFGNode Y : successors.get(X)) {
+                // Special-case: if Y equals ipdom(X) and X is a loop condition, add the edge.
+                if (Y.equals(ipdom.get(X)) && X.getLabel().startsWith("for-cond:")) {
+                    cdg.get(X).add(Y);
                     continue;
-
-                CFGGenerator.CFGNode currentRunner = successor;
-                // Follow the ipdom chain until reaching ipdom(branchNode) (if defined).
-                while (currentRunner != null && (ipdom.get(branchNode) == null || !currentRunner.equals(ipdom.get(branchNode)))) {
-                    if (currentRunner.equals(branchNode))
-                        break; // Avoid self-dependency.
-                    cdg.get(branchNode).add(currentRunner);
-                    CFGGenerator.CFGNode nextRunner = ipdom.get(currentRunner);
-                    if (nextRunner == null || nextRunner.equals(currentRunner))
-                        break;
-                    currentRunner = nextRunner;
+                }
+                // Otherwise, follow the ipdom chain upward from Y.
+                CFGGenerator.CFGNode W = Y;
+                while (W != null && !W.equals(X) && !W.equals(ipdom.get(X))) {
+                    cdg.get(X).add(W);           // X controls W.
+                    W = ipdom.get(W);            // Move one step up the postdominator tree.
                 }
             }
         }
 
-        // "Cover" step: for nodes with no incoming CD edge, add an edge from the method's start node.
+        // 5. "Cover" step: for nodes with no incoming CD edge, add an edge from the method's start node.
         CFGGenerator.CFGNode methodStart = null;
         for (CFGGenerator.CFGNode node : subCfg.getNodes()) {
             if (node.getLabel().startsWith("Method Start:")) {
@@ -237,7 +268,7 @@ public class CDGGenerator {
             }
         }
         if (methodStart != null) {
-            // Build incoming CD edge map.
+            // Build incoming map to see which nodes have no controller
             Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> incoming = new HashMap<>();
             for (CFGGenerator.CFGNode node : subCfg.getNodes()) {
                 incoming.put(node, new HashSet<>());
@@ -248,13 +279,14 @@ public class CDGGenerator {
                     incoming.get(dependent).add(controller);
                 }
             }
-            // For each node (except methodStart) with no incoming CD edge, add an edge from methodStart.
+            // For each node (except methodStart) with no incoming edge, link from methodStart
             for (CFGGenerator.CFGNode node : subCfg.getNodes()) {
                 if (!node.equals(methodStart) && incoming.get(node).isEmpty()) {
                     cdg.get(methodStart).add(node);
                 }
             }
         }
+
         return cdg;
     }
 
@@ -348,7 +380,7 @@ public class CDGGenerator {
      */
     public static void main(String[] args) {
         // Adjust the source path if necessary.
-        String sourcePath = "src/main/java/examples/SimpleExample.java";
+        String sourcePath = "src/main/java/examples/BuggyExample.java";
 
         CDGGenerator generator = new CDGGenerator();
         CFGGenerator.ControlFlowGraph cfg = generator.generateCFG(sourcePath);
@@ -356,6 +388,6 @@ public class CDGGenerator {
         cfg.printGraph();
 
         Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> cdg = computeInterproceduralCDG(cfg);
-        exportCDG(cdg, cfg, "src/main/resources/sanalysis/cdgs/cdg_simple_example.dot");
+        exportCDG(cdg, cfg, "src/main/resources/sanalysis/cdgs/cdg_buggy_example.dot");
     }
 }
