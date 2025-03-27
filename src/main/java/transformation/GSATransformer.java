@@ -88,7 +88,7 @@ public class GSATransformer {
             SingleExitTransformer singleExitTransformer = new SingleExitTransformer();
             singleExitTransformer.visit(cu, null);
 
-            // 11. (Optional) Further expression rewriting.
+            // 11. Further expression rewriting.
             ExpressionRewriter exprRewriter = new ExpressionRewriter();
             exprRewriter.visit(cu, null);
 
@@ -104,9 +104,7 @@ public class GSATransformer {
         }
     }
 
-    // ------------------------------
     // ReachingDefinitionsAnalysis (heuristic)
-    // ------------------------------
     private static class ReachingDefinitionsAnalysis {
         private final CFGGenerator.ControlFlowGraph cfg;
         public ReachingDefinitionsAnalysis(CFGGenerator.ControlFlowGraph cfg) {
@@ -189,9 +187,7 @@ public class GSATransformer {
         }
     }
 
-    // ------------------------------
     // VariableRenamer: Full SSA renaming.
-    // ------------------------------
     private static class VariableRenamer extends ModifierVisitor<Void> {
         private final Map<String, Integer> versionMap = new HashMap<>();
         public Map<String, Integer> getVersionMap() {
@@ -298,9 +294,7 @@ public class GSATransformer {
         }
     }
 
-    // ------------------------------
     // GatingInserterProduction: SSA/gating for merge points and while loops.
-    // ------------------------------
     private static class GatingInserterProduction extends VoidVisitorAdapter<Void> {
         private final Map<String, Integer> versionMap;
         public GatingInserterProduction(Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> cdg,
@@ -426,9 +420,7 @@ public class GSATransformer {
         }
     }
 
-    // ------------------------------
     // ReturnUpdater: Replace return variable with its latest SSA version.
-    // ------------------------------
     private static class ReturnUpdater extends VoidVisitorAdapter<Void> {
         private final Map<String, Integer> versionMap;
         public ReturnUpdater(Map<String, Integer> versionMap) {
@@ -448,9 +440,7 @@ public class GSATransformer {
         }
     }
 
-    // ------------------------------
     // SingleExitTransformer: Convert non-void methods to single-exit form.
-    // ------------------------------
     private static class SingleExitTransformer extends ModifierVisitor<Void> {
         @Override
         public Visitable visit(MethodDeclaration md, Void arg) {
@@ -495,9 +485,7 @@ public class GSATransformer {
         }
     }
 
-    // ------------------------------
     // WhileLoopConditionFixer: (No changes)
-    // ------------------------------
     private static class WhileLoopConditionFixer extends ModifierVisitor<Void> {
         @Override
         public Visitable visit(WhileStmt ws, Void arg) {
@@ -505,9 +493,7 @@ public class GSATransformer {
         }
     }
 
-    // ------------------------------
     // ExpressionRewriter: (Placeholder)
-    // ------------------------------
     private static class ExpressionRewriter extends ModifierVisitor<Void> {
         @Override
         public Visitable visit(ConditionalExpr ce, Void arg) {

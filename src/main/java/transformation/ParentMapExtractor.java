@@ -31,8 +31,8 @@ import java.util.*;
 public class ParentMapExtractor {
 
     // Hardcoded input and output file locations.
-    private static final String INPUT_FILE_PATH = "src/main/resources/transformation/gsas/transformed_simple_example.java";
-    private static final String OUTPUT_JSON_PATH = "src/main/resources/transformation/gsas/parentMap_simple_example.json";
+    private static final String INPUT_FILE_PATH = "src/main/resources/transformation/gsas/transformed_buggy_example.java";
+    private static final String OUTPUT_JSON_PATH = "src/main/resources/transformation/gsas/parentMap_buggy_example.json";
 
     // Inner class to hold an occurrence of an assignment.
     private static class Occurrence {

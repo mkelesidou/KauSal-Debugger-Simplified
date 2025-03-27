@@ -28,7 +28,7 @@ public class DominatorTreeGenerator {
         List<CFGGenerator.CFGNode> nodes = cfg.getNodes();
         Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> dominators = new HashMap<>();
 
-        // Initialize dominator sets: entry's dominators is only itself;
+        // Initialise dominator sets: entry's dominators is only itself;
         // for all other nodes, start with the set of all nodes.
         Set<CFGGenerator.CFGNode> allNodes = new HashSet<>(nodes);
         for (CFGGenerator.CFGNode node : nodes) {
