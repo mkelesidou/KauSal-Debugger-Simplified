@@ -4,6 +4,7 @@ import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.Node;
+import com.github.javaparser.ast.NodeList;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.expr.AssignExpr;
 import com.github.javaparser.ast.expr.BinaryExpr;
@@ -11,11 +12,7 @@ import com.github.javaparser.ast.expr.ConditionalExpr;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.VariableDeclarationExpr;
-import com.github.javaparser.ast.stmt.BlockStmt;
-import com.github.javaparser.ast.stmt.ExpressionStmt;
-import com.github.javaparser.ast.stmt.IfStmt;
-import com.github.javaparser.ast.stmt.Statement;
-import com.github.javaparser.ast.stmt.WhileStmt;
+import com.github.javaparser.ast.stmt.*;
 import com.github.javaparser.ast.type.PrimitiveType;
 import com.github.javaparser.ast.visitor.ModifierVisitor;
 import com.github.javaparser.ast.visitor.Visitable;
@@ -34,39 +31,6 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Production‑style GSA transformer.
- *
- * This transformer integrates:
- *  1. CFG/CDG analysis (using CFGGenerator, DominatorTreeGenerator, and CDGGenerator).
- *  2. A worklist‑based reaching definitions analysis over the CFG.
- *  3. Full SSA renaming.
- *  4. Insertion of gating (merge) assignments at merge points using the CDG and reaching definitions.
- *  5. (Optionally) Fixing of while‑loop conditions to use the merged variable.
- *
- * For example, for simpleMethod, the expected output is:
- *
- *   public static int simpleMethod(int x_0) {
- *       int result_1;
- *       final boolean P1_1 = x_0 > 5;
- *       if (P1_1) {
- *           result_2 = x_0 * 2;
- *       } else {
- *           result_3 = x_0 + 3;
- *       }
- *       int result_4 = P1_1 ? result_2 : result_3;
- *       boolean P2_1 = result_4 < 15;
- *       while (P2_1) {
- *           result_5 = result_4 + 2;
- *           result_4 = result_5;
- *           P2_1 = result_4 < 15;
- *       }
- *       return result_4;
- *   }
- *
- * Note: This prototype uses heuristics to parse CFG node labels for reaching definitions
- * and a BlockStmt visitor to insert merge assignments.
- */
 public class GSATransformer {
 
     public static void main(String[] args) {
@@ -116,11 +80,19 @@ public class GSATransformer {
             GatingInserterProduction gatingInserter = new GatingInserterProduction(cdg, reachingDefs, versionMap);
             gatingInserter.visit(cu, null);
 
-            // 9. (Optional) Further expression rewriting.
+            // 9. Update return statements to use the latest SSA version.
+            ReturnUpdater returnUpdater = new ReturnUpdater(versionMap);
+            returnUpdater.visit(cu, null);
+
+            // 10. Convert each non-void method to single-exit form.
+            SingleExitTransformer singleExitTransformer = new SingleExitTransformer();
+            singleExitTransformer.visit(cu, null);
+
+            // 11. (Optional) Further expression rewriting.
             ExpressionRewriter exprRewriter = new ExpressionRewriter();
             exprRewriter.visit(cu, null);
 
-            // 10. Write the transformed source code to an output file.
+            // 12. Write the transformed source code to an output file.
             String outputPath = "src/main/resources/transformation/gsas/transformed_simple_example.java";
             try (PrintWriter writer = new PrintWriter(new FileWriter(outputPath))) {
                 writer.println(cu.toString());
@@ -218,7 +190,7 @@ public class GSATransformer {
     }
 
     // ------------------------------
-    // VariableRenamer: Full SSA renaming with controlled branch order.
+    // VariableRenamer: Full SSA renaming.
     // ------------------------------
     private static class VariableRenamer extends ModifierVisitor<Void> {
         private final Map<String, Integer> versionMap = new HashMap<>();
@@ -230,7 +202,6 @@ public class GSATransformer {
             versionMap.clear();
             md.getParameters().forEach(param -> {
                 String orig = param.getNameAsString();
-                // For booleans, rename only once.
                 if (param.getType().isPrimitiveType() &&
                         param.getType().asPrimitiveType().getType().name().equalsIgnoreCase("BOOLEAN")) {
                     versionMap.put(orig, 1);
@@ -268,15 +239,12 @@ public class GSATransformer {
         @Override
         public Visitable visit(NameExpr ne, Void arg) {
             String orig = ne.getNameAsString();
-            // If the name already matches SSA pattern, skip renaming.
             if (orig.matches("^[a-zA-Z]+_[0-9]+$")) {
                 return super.visit(ne, arg);
             }
-            // Use type resolution to check for booleans.
             try {
                 String typeName = ne.resolve().getType().describe();
                 if (typeName.equals("boolean")) {
-                    // For predicate variables (starting with "P"), do not rename further.
                     if (orig.startsWith("P")) {
                         return super.visit(ne, arg);
                     }
@@ -298,13 +266,17 @@ public class GSATransformer {
         }
         @Override
         public Visitable visit(AssignExpr ae, Void arg) {
+            // If this assignment is inside a while loop and is a compound "+=", skip version increment.
+            boolean insideWhile = ae.findAncestor(WhileStmt.class).isPresent();
             if (ae.getTarget().isNameExpr()) {
                 String currentName = ae.getTarget().asNameExpr().getNameAsString();
-                // For boolean predicates (starting with "P"), skip further renaming.
                 if (currentName.startsWith("P")) {
                     return super.visit(ae, arg);
                 }
-                // Use regex to extract the base name if already in SSA form.
+                // If inside a while and this is a compound assignment, do not update the version.
+                if (insideWhile && ae.getOperator() == AssignExpr.Operator.PLUS) {
+                    return super.visit(ae, arg);
+                }
                 String baseName = currentName;
                 Pattern pattern = Pattern.compile("^([a-zA-Z]+)_(\\d+)$");
                 Matcher matcher = pattern.matcher(currentName);
@@ -319,19 +291,15 @@ public class GSATransformer {
         }
         @Override
         public Visitable visit(IfStmt ifStmt, Void arg) {
-            // First, process the condition so that boolean predicates are visited.
             ifStmt.getCondition().accept(this, arg);
-            // Process the then and else branches.
             ifStmt.getThenStmt().accept(this, arg);
             ifStmt.getElseStmt().ifPresent(stmt -> stmt.accept(this, arg));
-            // Return the if-statement without calling super.visit to avoid duplicate renaming.
             return ifStmt;
         }
     }
 
     // ------------------------------
-    // GatingInserterProduction: Insert merge assignments at merge points.
-    // This visitor handles both if-else and while loops.
+    // GatingInserterProduction: SSA/gating for merge points and while loops.
     // ------------------------------
     private static class GatingInserterProduction extends VoidVisitorAdapter<Void> {
         private final Map<String, Integer> versionMap;
@@ -342,13 +310,17 @@ public class GSATransformer {
         }
         @Override
         public void visit(BlockStmt block, Void arg) {
+            // For if-else merge on candidate "result"
+            if (!versionMap.containsKey("result") || versionMap.get("result") == 0) {
+                super.visit(block, arg);
+                return;
+            }
             List<Statement> stmts = new ArrayList<>(block.getStatements());
             for (int i = 0; i < stmts.size(); i++) {
                 Statement stmt = stmts.get(i);
                 if (stmt instanceof IfStmt) {
                     IfStmt ifStmt = (IfStmt) stmt;
                     if (!ifStmt.getElseStmt().isPresent()) continue;
-                    // For our example, we focus on the variable "result".
                     int thenVersion = findMaxVersion(ifStmt.getThenStmt(), "result");
                     int elseVersion = findMaxVersion(ifStmt.getElseStmt().get(), "result");
                     if (thenVersion == 0 || elseVersion == 0) continue;
@@ -374,82 +346,65 @@ public class GSATransformer {
         }
         @Override
         public void visit(WhileStmt ws, Void arg) {
-            // Expect the while condition to be a NameExpr (the predicate variable).
             if (!(ws.getCondition() instanceof NameExpr)) {
                 super.visit(ws, arg);
                 return;
             }
-            String predVar = ((NameExpr) ws.getCondition()).getNameAsString();
-            // Retrieve the original predicate condition from its declaration.
-            Optional<Expression> originalConditionOpt = ws.findAncestor(BlockStmt.class)
-                    .flatMap(block -> block.findAll(VariableDeclarationExpr.class).stream()
-                            .filter(vde -> vde.getVariables().stream().anyMatch(v -> v.getNameAsString().equals(predVar)))
-                            .findFirst()
-                            .flatMap(vde -> vde.getVariables().get(0).getInitializer()));
-            if (!originalConditionOpt.isPresent()) {
-                super.visit(ws, arg);
-                return;
-            }
-            Expression originalCondition = originalConditionOpt.get().clone();
-
-            // Process the while body to rewrite a compound assignment.
-            // We assume the while body contains a compound assignment on the loop-carried variable.
-            // Instead of updating the versionMap, we reuse the merged variable from the if-else merge.
-            String mergedVar = "result_" + versionMap.get("result");
-            String oldLoopVar = null;
+            // Detect the loop-carried variable via a compound "+=" assignment.
+            String baseVar = null;
             if (ws.getBody().isBlockStmt()) {
                 BlockStmt body = ws.getBody().asBlockStmt();
-                List<Statement> stmts = body.getStatements();
-                for (int i = 0; i < stmts.size(); i++) {
-                    Statement stmt = stmts.get(i);
+                for (Statement stmt : body.getStatements()) {
                     if (stmt.isExpressionStmt() && stmt.asExpressionStmt().getExpression().isAssignExpr()) {
                         AssignExpr ae = stmt.asExpressionStmt().getExpression().asAssignExpr();
-                        if (ae.getOperator().asString().equals("+=")) {
-                            // Instead of incrementing the versionMap here,
-                            // we assume the merged variable remains the same (e.g. "result_4").
-                            oldLoopVar = ae.getTarget().asNameExpr().getNameAsString();
-                            if (oldLoopVar.startsWith("P")) continue;
-                            // Create a temporary variable for the update.
-                            // For example, if mergedVar is "result_4", then temp becomes "result_5".
-                            String tempVar = "result_" + (versionMap.get("result") + 1);
-                            Expression newValue = new BinaryExpr(
-                                    ae.getTarget().clone(),
-                                    ae.getValue().clone(),
-                                    BinaryExpr.Operator.PLUS
-                            );
-                            AssignExpr newAssign = new AssignExpr(
-                                    new NameExpr(tempVar),
-                                    newValue,
-                                    AssignExpr.Operator.ASSIGN
-                            );
-                            stmt.replace(new ExpressionStmt(newAssign));
-                            // Insert merge assignment: mergedVar = tempVar;
-                            AssignExpr mergeAssign = new AssignExpr(
-                                    new NameExpr(mergedVar),
-                                    new NameExpr(tempVar),
-                                    AssignExpr.Operator.ASSIGN
-                            );
-                            body.addStatement(i + 1, new ExpressionStmt(mergeAssign));
-                            break; // Process only once per while loop.
+                        if (ae.getOperator() == AssignExpr.Operator.PLUS) {
+                            String target = ae.getTarget().asNameExpr().getNameAsString();
+                            baseVar = target.replaceAll("_\\d+$", "");
+                            break;
                         }
                     }
                 }
             }
-            // Update the predicate initializer using regex substitution.
-            // Replace any occurrence of "result" (with an optional SSA suffix) with the mergedVar.
-            String conditionStr = originalCondition.toString();
-            String newConditionStr = conditionStr.replaceAll("result(?:_\\d+)?", mergedVar);
-            Expression substitutedCondition = StaticJavaParser.parseExpression(newConditionStr);
-            // Locate the predicate declaration in an enclosing block and update its initializer.
-            ws.findAncestor(BlockStmt.class).ifPresent(block -> {
-                for (VariableDeclarationExpr vde : block.findAll(VariableDeclarationExpr.class)) {
-                    vde.getVariables().forEach(v -> {
-                        if (v.getNameAsString().equals(predVar)) {
-                            v.setInitializer(substitutedCondition);
+            if (baseVar == null) {
+                super.visit(ws, arg);
+                return;
+            }
+            // Use the current SSA name without updating the versionMap.
+            int currentVer = versionMap.getOrDefault(baseVar, 1);
+            String currentSSA = baseVar + "_" + currentVer;
+            // Use a temporary name based on the base variable.
+            String tempVar = baseVar + "_temp";
+            if (ws.getBody().isBlockStmt()) {
+                BlockStmt body = ws.getBody().asBlockStmt();
+                List<Statement> stmts = new ArrayList<>(body.getStatements());
+                for (int i = 0; i < stmts.size(); i++) {
+                    Statement stmt = stmts.get(i);
+                    if (stmt.isExpressionStmt() &&
+                            stmt.asExpressionStmt().getExpression().isAssignExpr()) {
+                        AssignExpr ae = stmt.asExpressionStmt().getExpression().asAssignExpr();
+                        if (ae.getOperator() == AssignExpr.Operator.PLUS) {
+                            String currentTarget = ae.getTarget().asNameExpr().getNameAsString();
+                            String rawTarget = currentTarget.replaceAll("_\\d+$", "");
+                            if (!rawTarget.equals(baseVar)) continue;
+                            // Replace "sum_1 += expr;" with "int temp = sum_1 + expr;"
+                            Expression newValue = new BinaryExpr(new NameExpr(currentSSA),
+                                    ae.getValue().clone(), BinaryExpr.Operator.PLUS);
+                            VariableDeclarationExpr tempDecl = new VariableDeclarationExpr();
+                            tempDecl.addVariable(new com.github.javaparser.ast.body.VariableDeclarator(
+                                    new PrimitiveType(PrimitiveType.Primitive.INT),
+                                    tempVar,
+                                    newValue
+                            ));
+                            body.getStatements().set(i, new ExpressionStmt(tempDecl));
+                            // Immediately insert an assignment: currentSSA = temp;
+                            AssignExpr mergeAssign = new AssignExpr(new NameExpr(currentSSA),
+                                    new NameExpr(tempVar), AssignExpr.Operator.ASSIGN);
+                            body.addStatement(i + 1, new ExpressionStmt(mergeAssign));
+                            break;
                         }
-                    });
+                    }
                 }
-            });
+            }
             super.visit(ws, arg);
         }
         private int findMaxVersion(Node node, String var) {
@@ -472,7 +427,76 @@ public class GSATransformer {
     }
 
     // ------------------------------
-    // WhileLoopConditionFixer: No extra fix needed if booleans remain unchanged.
+    // ReturnUpdater: Replace return variable with its latest SSA version.
+    // ------------------------------
+    private static class ReturnUpdater extends VoidVisitorAdapter<Void> {
+        private final Map<String, Integer> versionMap;
+        public ReturnUpdater(Map<String, Integer> versionMap) {
+            this.versionMap = versionMap;
+        }
+        @Override
+        public void visit(ReturnStmt rs, Void arg) {
+            rs.getExpression().ifPresent(expr -> {
+                if (expr instanceof NameExpr) {
+                    NameExpr ne = (NameExpr) expr;
+                    String base = ne.getNameAsString().replaceAll("_\\d+$", "");
+                    int latest = versionMap.getOrDefault(base, 0);
+                    ne.setName(base + "_" + latest);
+                }
+            });
+            super.visit(rs, arg);
+        }
+    }
+
+    // ------------------------------
+    // SingleExitTransformer: Convert non-void methods to single-exit form.
+    // ------------------------------
+    private static class SingleExitTransformer extends ModifierVisitor<Void> {
+        @Override
+        public Visitable visit(MethodDeclaration md, Void arg) {
+            if (md.getType().isVoidType() || !md.getBody().isPresent()) {
+                return super.visit(md, arg);
+            }
+            BlockStmt originalBody = md.getBody().get();
+            // Create a new exit variable.
+            String exitVar = "_exit";
+            VariableDeclarationExpr exitDecl = new VariableDeclarationExpr(md.getType(), exitVar);
+            // Wrap the original body in a labeled block.
+            LabeledStmt labeledBody = new LabeledStmt("methodBody", originalBody);
+            // Replace return statements inside the original body.
+            originalBody.accept(new ReturnReplacer(exitVar, "methodBody"), null);
+            // Build a new method body.
+            BlockStmt newBody = new BlockStmt();
+            newBody.addStatement(exitDecl);
+            newBody.addStatement(labeledBody);
+            newBody.addStatement(new ReturnStmt(new NameExpr(exitVar)));
+            md.setBody(newBody);
+            return md;
+        }
+    }
+
+    private static class ReturnReplacer extends ModifierVisitor<Void> {
+        private final String exitVar;
+        private final String label;
+        public ReturnReplacer(String exitVar, String label) {
+            this.exitVar = exitVar;
+            this.label = label;
+        }
+        @Override
+        public Visitable visit(ReturnStmt rs, Void arg) {
+            List<Statement> replacement = new ArrayList<>();
+            if (rs.getExpression().isPresent()) {
+                Expression expr = rs.getExpression().get();
+                AssignExpr assign = new AssignExpr(new NameExpr(exitVar), expr, AssignExpr.Operator.ASSIGN);
+                replacement.add(new ExpressionStmt(assign));
+            }
+            replacement.add(new BreakStmt(label));
+            return new BlockStmt(new NodeList<>(replacement));
+        }
+    }
+
+    // ------------------------------
+    // WhileLoopConditionFixer: (No changes)
     // ------------------------------
     private static class WhileLoopConditionFixer extends ModifierVisitor<Void> {
         @Override
@@ -482,7 +506,7 @@ public class GSATransformer {
     }
 
     // ------------------------------
-    // ExpressionRewriter: Placeholder for additional rewriting.
+    // ExpressionRewriter: (Placeholder)
     // ------------------------------
     private static class ExpressionRewriter extends ModifierVisitor<Void> {
         @Override
