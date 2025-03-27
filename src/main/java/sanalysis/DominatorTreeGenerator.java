@@ -189,7 +189,7 @@ public class DominatorTreeGenerator {
      * 6. Exports the dominator tree to a DOT file.
      */
     public static void main(String[] args) {
-        String sourcePath = "src/main/java/examples/SimpleExample.java";
+        String sourcePath = "src/main/java/examples/BuggyExample.java";
         CFGGenerator cfgGen = new CFGGenerator();
         CFGGenerator.ControlFlowGraph cfg = cfgGen.generateCFG(sourcePath);
 
@@ -233,6 +233,6 @@ public class DominatorTreeGenerator {
 
         // Generate the dominator tree and export it to a DOT file.
         CFGGenerator.ControlFlowGraph domTree = generateDominatorTree(idom);
-        domTree.exportToDotFile("src/main/resources/sanalysis/dags/dominator_tree_simple_example.dot");
+        domTree.exportToDotFile("src/main/resources/sanalysis/dags/dominator_tree_buggy_example.dot");
     }
 }
