@@ -8,26 +8,16 @@ import com.github.javaparser.ast.Modifier;
 import com.github.javaparser.ast.NodeList;
 import com.github.javaparser.ast.visitor.ModifierVisitor;
 import com.github.javaparser.ast.visitor.Visitable;
-
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * PredicateTransformer transforms control statements in Java source code by hoisting their
- * condition expressions into dedicated predicate variables. This is useful for instrumenting
- * or analyzing control flow in a program.
- *
- * The transformations include:
- *  - If-statements: The condition is evaluated into a final boolean predicate variable,
- *    which replaces the original condition.
- *  - While-loops: The condition is stored in a non-final boolean predicate variable, which is updated
- *    at the end of each loop iteration.
- *  - For-loops: Converted into equivalent while-loops so that the loop condition is stored
- *    and updated via a predicate variable.
- *  - Switch-statements: The selector expression is hoisted into a final variable.
+ * condition expressions into dedicated predicate variables.
  */
 public class PredicateTransformer extends ModifierVisitor<Void> {
 
@@ -36,185 +26,208 @@ public class PredicateTransformer extends ModifierVisitor<Void> {
 
     /**
      * Transforms an if-statement by hoisting its condition into a new final boolean variable.
-     * The variable is declared immediately before the if-statement and then used in place of the original condition.
-     *
-     * @param ifStmt the if-statement to transform.
-     * @param arg    not used.
-     * @return the transformed if-statement.
      */
     @Override
     public Visitable visit(IfStmt ifStmt, Void arg) {
-        Expression originalCondition = ifStmt.getCondition();
+        // Skip if already transformed
+        if (ifStmt.getCondition() instanceof NameExpr && 
+            ((NameExpr)ifStmt.getCondition()).getNameAsString().startsWith("P")) {
+            return super.visit(ifStmt, arg);
+        }
+
+        // Create a final boolean predicate for the condition
+        Expression condition = ifStmt.getCondition().clone();
         String predicateName = "P" + predicateCounter.getAndIncrement();
-
-        // Create a final boolean variable to hold the condition.
-        VariableDeclarationExpr predicateDeclaration = new VariableDeclarationExpr(
-                StaticJavaParser.parseType("boolean"), predicateName);
-        predicateDeclaration.addModifier(Modifier.Keyword.FINAL);
-        predicateDeclaration.getVariables().get(0).setInitializer(originalCondition.clone());
-
-        // Insert the declaration immediately before the if-statement if the parent is a block.
+        
+        // Create variable declaration with final modifier
+        VariableDeclarationExpr predicateDecl = new VariableDeclarationExpr(
+            StaticJavaParser.parseType("boolean"), predicateName);
+        predicateDecl.addModifier(Modifier.Keyword.FINAL);
+        predicateDecl.getVariables().get(0).setInitializer(condition);
+        
+        // Add declaration before if statement
         if (ifStmt.getParentNode().isPresent() && ifStmt.getParentNode().get() instanceof BlockStmt) {
             BlockStmt parentBlock = (BlockStmt) ifStmt.getParentNode().get();
             int index = parentBlock.getStatements().indexOf(ifStmt);
-            parentBlock.addStatement(index, predicateDeclaration);
+            if (index >= 0) {
+                parentBlock.getStatements().add(index, new ExpressionStmt(predicateDecl));
+            }
         }
-
-        // Replace the if-statement's condition with the predicate variable.
+        
+        // Replace condition with predicate variable
         ifStmt.setCondition(new NameExpr(predicateName));
-        System.out.println("Transformed if-condition at line " +
-                ifStmt.getBegin().map(p -> p.line).orElse(-1) + " into boolean variable: " + predicateName);
-
+        
+        // Continue normal traversal
         return super.visit(ifStmt, arg);
     }
 
     /**
-     * Transforms a while-loop so that its condition is stored in a non-final predicate variable.
-     * The variable is declared before the loop, replaces the original condition, and is updated at the end of each iteration.
-     *
-     * @param whileStmt the while-loop to transform.
-     * @param arg       not used.
-     * @return the transformed while-loop.
+     * Transforms a while-loop by hoisting its condition into a non-final boolean variable.
      */
     @Override
     public Visitable visit(WhileStmt whileStmt, Void arg) {
-        Expression originalCondition = whileStmt.getCondition();
+        // Skip if already transformed
+        if (whileStmt.getCondition() instanceof NameExpr && 
+            ((NameExpr)whileStmt.getCondition()).getNameAsString().startsWith("P")) {
+            return super.visit(whileStmt, arg);
+        }
+        
+        // Create a non-final boolean predicate for the condition
+        Expression condition = whileStmt.getCondition().clone();
         String predicateName = "P" + predicateCounter.getAndIncrement();
-
-        // Create a non-final boolean variable to hold the condition.
-        VariableDeclarationExpr predicateDeclaration = new VariableDeclarationExpr(
-                StaticJavaParser.parseType("boolean"), predicateName);
-        predicateDeclaration.getVariables().get(0).setInitializer(originalCondition.clone());
-
-        // Insert the declaration before the while-loop if the parent is a block.
+        
+        // Create variable declaration without final modifier
+        VariableDeclarationExpr predicateDecl = new VariableDeclarationExpr(
+            StaticJavaParser.parseType("boolean"), predicateName);
+        predicateDecl.getVariables().get(0).setInitializer(condition);
+        
+        // Add declaration before while loop
         if (whileStmt.getParentNode().isPresent() && whileStmt.getParentNode().get() instanceof BlockStmt) {
             BlockStmt parentBlock = (BlockStmt) whileStmt.getParentNode().get();
             int index = parentBlock.getStatements().indexOf(whileStmt);
-            parentBlock.addStatement(index, predicateDeclaration);
+            if (index >= 0) {
+                parentBlock.getStatements().add(index, new ExpressionStmt(predicateDecl));
+            }
         }
-
-        // Replace the while-loop's condition with the predicate variable.
+        
+        // Replace condition with predicate variable
         whileStmt.setCondition(new NameExpr(predicateName));
-
-        // Ensure the loop body is a block, then add an update statement at the end to reassign the predicate.
-        Statement originalBody = whileStmt.getBody();
-        BlockStmt loopBodyBlock;
-        if (originalBody.isBlockStmt()) {
-            loopBodyBlock = originalBody.asBlockStmt();
+        
+        // Make sure the body is a block statement
+        Statement body = whileStmt.getBody();
+        BlockStmt blockBody;
+        if (!(body instanceof BlockStmt)) {
+            blockBody = new BlockStmt();
+            blockBody.addStatement(body);
+            whileStmt.setBody(blockBody);
         } else {
-            loopBodyBlock = new BlockStmt();
-            loopBodyBlock.addStatement(originalBody);
+            blockBody = (BlockStmt) body;
         }
-        ExpressionStmt updatePredicate = new ExpressionStmt(
-                new AssignExpr(new NameExpr(predicateName), originalCondition.clone(), AssignExpr.Operator.ASSIGN));
-        loopBodyBlock.addStatement(updatePredicate);
-        whileStmt.setBody(loopBodyBlock);
-
-        System.out.println("Transformed while-condition at line " +
-                whileStmt.getBegin().map(p -> p.line).orElse(-1) + " into non-final variable: " + predicateName);
-
+        
+        // Add assignment to update predicate at end of loop
+        AssignExpr updateExpr = new AssignExpr(
+            new NameExpr(predicateName), 
+            condition.clone(), 
+            AssignExpr.Operator.ASSIGN);
+        blockBody.addStatement(new ExpressionStmt(updateExpr));
+        
+        // Continue normal traversal
         return super.visit(whileStmt, arg);
     }
 
     /**
-     * Transforms a for-loop by converting it into an equivalent while-loop.
-     * The loop's initialization remains in place, and the condition is hoisted into a predicate variable
-     * that is updated at each iteration.
-     *
-     * @param forStmt the for-loop to transform.
-     * @param arg     not used.
-     * @return a block statement containing the transformed loop.
+     * Transforms a for-loop into a while loop by hoisting its condition.
      */
     @Override
     public Visitable visit(ForStmt forStmt, Void arg) {
-        if (forStmt.getCompare().isPresent()) {
-            NodeList<Expression> initializations = forStmt.getInitialization();
-            Expression originalCondition = forStmt.getCompare().get();
-            NodeList<Expression> updates = forStmt.getUpdate();
-            Statement originalBody = forStmt.getBody();
-
-            String predicateName = "P" + predicateCounter.getAndIncrement();
-
-            // Create a non-final boolean variable to hold the for-loop condition.
-            VariableDeclarationExpr predicateDeclaration = new VariableDeclarationExpr(
-                    StaticJavaParser.parseType("boolean"), predicateName);
-            predicateDeclaration.getVariables().get(0).setInitializer(originalCondition.clone());
-
-            // Prepare the loop body: ensure it's a block and add update expressions.
-            BlockStmt newLoopBody;
-            if (originalBody.isBlockStmt()) {
-                newLoopBody = originalBody.asBlockStmt();
-            } else {
-                newLoopBody = new BlockStmt();
-                newLoopBody.addStatement(originalBody);
-            }
-            // Append the original update expressions.
-            for (Expression update : updates) {
-                newLoopBody.addStatement(new ExpressionStmt(update));
-            }
-            // Append the update for the predicate variable.
-            ExpressionStmt updatePredicate = new ExpressionStmt(
-                    new AssignExpr(new NameExpr(predicateName), originalCondition.clone(), AssignExpr.Operator.ASSIGN));
-            newLoopBody.addStatement(updatePredicate);
-
-            // Construct the while-loop using the predicate variable.
-            WhileStmt transformedWhile = new WhileStmt(new NameExpr(predicateName), newLoopBody);
-
-            // Create a new block to contain initializations, the predicate declaration, and the while-loop.
-            BlockStmt newBlock = new BlockStmt();
-            for (Expression init : initializations) {
-                newBlock.addStatement(init);
-            }
-            newBlock.addStatement(predicateDeclaration);
-            newBlock.addStatement(transformedWhile);
-
-            System.out.println("Transformed for-loop at line " +
-                    forStmt.getBegin().map(p -> p.line).orElse(-1) +
-                    " into while-loop with predicate variable: " + predicateName);
-            return newBlock;
+        if (!forStmt.getCompare().isPresent()) {
+            return super.visit(forStmt, arg);
         }
-        return super.visit(forStmt, arg);
+        
+        if (forStmt.getCompare().get() instanceof NameExpr && 
+            ((NameExpr)forStmt.getCompare().get()).getNameAsString().startsWith("P")) {
+            // If already transformed, don't transform again
+            return super.visit(forStmt, arg);
+        }
+        
+        // Extract components of the for loop
+        NodeList<Expression> initialization = forStmt.getInitialization();
+        Expression condition = forStmt.getCompare().get().clone();
+        NodeList<Expression> update = forStmt.getUpdate();
+        Statement body = forStmt.getBody();
+        
+        // Create a new block to hold everything
+        BlockStmt newBlock = new BlockStmt();
+        
+        // Add initializations first
+        for (Expression init : initialization) {
+            newBlock.addStatement(new ExpressionStmt(init.clone()));
+        }
+        
+        // Create predicate variable
+        String predicateName = "P" + predicateCounter.getAndIncrement();
+        VariableDeclarationExpr predicateDecl = new VariableDeclarationExpr(
+            StaticJavaParser.parseType("boolean"), predicateName);
+        predicateDecl.getVariables().get(0).setInitializer(condition);
+        newBlock.addStatement(new ExpressionStmt(predicateDecl));
+        
+        // Create while loop body
+        BlockStmt whileBody;
+        if (body instanceof BlockStmt) {
+            whileBody = (BlockStmt) body.clone();
+        } else {
+            whileBody = new BlockStmt();
+            whileBody.addStatement(body.clone());
+        }
+        
+        // Add update expressions to end of while loop body
+        for (Expression expr : update) {
+            whileBody.addStatement(new ExpressionStmt(expr.clone()));
+        }
+        
+        // Add predicate update at end of loop body
+        AssignExpr updateExpr = new AssignExpr(
+            new NameExpr(predicateName), 
+            condition.clone(), 
+            AssignExpr.Operator.ASSIGN);
+        whileBody.addStatement(new ExpressionStmt(updateExpr));
+        
+        // Create while statement with predicate as condition
+        WhileStmt whileStmt = new WhileStmt(new NameExpr(predicateName), whileBody);
+        newBlock.addStatement(whileStmt);
+        
+        // Let the visitor framework handle the rest of the traversal
+        return super.visit(newBlock, arg);
     }
 
     /**
-     * Transforms a switch statement by hoisting the selector expression into a final variable.
-     * Assumes the selector is of type int (adjust the type if needed).
-     *
-     * @param switchStmt the switch statement to transform.
-     * @param arg        not used.
-     * @return the transformed switch statement.
+     * Transforms a switch statement by hoisting its selector into a final variable.
      */
     @Override
     public Visitable visit(SwitchStmt switchStmt, Void arg) {
-        Expression originalSelector = switchStmt.getSelector();
-        String predicateName = "S" + predicateCounter.getAndIncrement();
-
-        // Create a final int variable for the switch selector.
-        VariableDeclarationExpr selectorDeclaration = new VariableDeclarationExpr(
-                StaticJavaParser.parseType("int"), predicateName);
-        selectorDeclaration.addModifier(Modifier.Keyword.FINAL);
-        selectorDeclaration.getVariables().get(0).setInitializer(originalSelector.clone());
-
-        // Insert the declaration before the switch statement if the parent is a block.
+        // Skip if already transformed
+        if (switchStmt.getSelector() instanceof NameExpr && 
+            ((NameExpr)switchStmt.getSelector()).getNameAsString().startsWith("S")) {
+            return super.visit(switchStmt, arg);
+        }
+        
+        // Create a final selector variable
+        Expression selector = switchStmt.getSelector().clone();
+        String selectorName = "S" + predicateCounter.getAndIncrement();
+        
+        // Create variable declaration with final modifier
+        VariableDeclarationExpr selectorDecl = new VariableDeclarationExpr(
+            StaticJavaParser.parseType("int"), selectorName);
+        selectorDecl.addModifier(Modifier.Keyword.FINAL);
+        selectorDecl.getVariables().get(0).setInitializer(selector);
+        
+        // Add declaration before switch statement
         if (switchStmt.getParentNode().isPresent() && switchStmt.getParentNode().get() instanceof BlockStmt) {
             BlockStmt parentBlock = (BlockStmt) switchStmt.getParentNode().get();
             int index = parentBlock.getStatements().indexOf(switchStmt);
-            parentBlock.addStatement(index, selectorDeclaration);
+            if (index >= 0) {
+                parentBlock.getStatements().add(index, new ExpressionStmt(selectorDecl));
+            }
         }
-
-        // Replace the selector with the newly declared variable.
-        switchStmt.setSelector(new NameExpr(predicateName));
-        System.out.println("Transformed switch selector at line " +
-                switchStmt.getBegin().map(p -> p.line).orElse(-1) + " into variable: " + predicateName);
+        
+        // Replace selector with variable
+        switchStmt.setSelector(new NameExpr(selectorName));
+        
+        // Continue normal traversal
         return super.visit(switchStmt, arg);
     }
 
     /**
-     * Transforms the given source file by applying the predicate transformations and saves the output.
-     *
-     * @param sourceFile the original source file.
-     * @param outputFile the file where the transformed source will be saved.
-     * @throws IOException if file reading or writing fails.
+     * Visit a block statement and process all its statements.
+     */
+    @Override
+    public Visitable visit(BlockStmt block, Void arg) {
+        // Let the visitor framework handle the traversal
+        return super.visit(block, arg);
+    }
+
+    /**
+     * Transforms the given source file by applying the predicate transformations.
      */
     public static void transformFile(File sourceFile, File outputFile) throws IOException {
         CompilationUnit cu = StaticJavaParser.parse(sourceFile);
@@ -226,14 +239,10 @@ public class PredicateTransformer extends ModifierVisitor<Void> {
 
     /**
      * Main method to perform the predicate transformation on a sample source file.
-     *
-     * @param args command-line arguments.
-     * @throws Exception if an error occurs during transformation.
      */
     public static void main(String[] args) throws Exception {
-        // Define the input source file and the output destination.
-        File sourceFile = new File("src/main/java/examples/SimpleExample.java");
-        File outputFile = new File("src/main/resources/sanalysis/predicate_transformation/transformed_simple_example.java");
+        File sourceFile = new File("src/main/java/examples/BuggyExample.java");
+        File outputFile = new File("src/main/resources/transformation/predicates/transformed_buggy_example.java");
         transformFile(sourceFile, outputFile);
     }
 }
