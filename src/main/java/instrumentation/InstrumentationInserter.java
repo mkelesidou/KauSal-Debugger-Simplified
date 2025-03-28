@@ -12,99 +12,63 @@ import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.StringLiteralExpr;
 import com.github.javaparser.ast.expr.VariableDeclarationExpr;
-import com.github.javaparser.ast.stmt.BlockStmt;
-import com.github.javaparser.ast.stmt.ExpressionStmt;
-import com.github.javaparser.ast.stmt.Statement;
+import com.github.javaparser.ast.stmt.*;
 import com.github.javaparser.ast.type.PrimitiveType;
 import com.github.javaparser.ast.visitor.ModifierVisitor;
 import com.github.javaparser.ast.visitor.Visitable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.FileWriter;
-import java.io.PrintWriter;
+
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.*;
 
-/**
- * InstrumentationInserter modifies a Java source file by:
- * 1) Forcing the final code into the 'instrumentation' package,
- * 2) Ensuring that each assignment’s target variable is declared in the enclosing method (with default initializer 0),
- * 3) Inserting logging calls via CollectOut immediately after each assignment,
- * 4) Lifting conditional expressions into temporary variables (with logging),
- * 5) Updating the main method so that input_1 is assigned from command-line arguments and the parameter is renamed to "args".
- *
- * This version uses hardcoded file paths.
- */
 public class InstrumentationInserter extends ModifierVisitor<Void> {
     private static final Logger logger = LoggerFactory.getLogger(InstrumentationInserter.class);
 
-    // Store generated temporary names to avoid collisions.
+    private static final String INPUT_FILE_PATH = "src/main/resources/transformation/gsas/transformed_buggy_example.java";
+    private static final String OUTPUT_FILE_PATH = "src/main/resources/instrumentation/BuggyExample.java";
+
+    // Set to track unique temporary names.
     private final Set<String> usedNames = new HashSet<>();
+
+    // Marker string to indicate that a node has been instrumented.
+    private static final String INSTRUMENTATION_MARKER = "//[instrumented]";
+
+    // Map to keep track of instrumented variable names per method.
+    private final Map<MethodDeclaration, Set<String>> instrumentedVars = new HashMap<>();
 
     public static void main(String[] args) {
         try {
-            String sourcePath = "src/main/resources/transformation/gsas/transformed_simple_example.java";
+            String sourcePath = INPUT_FILE_PATH;
             String sourceCode = new String(Files.readAllBytes(Paths.get(sourcePath)));
-            String instrumentedSource = transformSource(sourceCode);
-            String outputPath = "src/main/resources/instrumentation/SimpleExample.java";
-            try (PrintWriter writer = new PrintWriter(new FileWriter(outputPath))) {
-                writer.println(instrumentedSource);
+            // If source already appears instrumented, skip instrumentation.
+            if (sourceCode.contains("CollectOut.logVariable(")) {
+                logger.info("Source already instrumented. Skipping instrumentation.");
+                Files.write(Paths.get(OUTPUT_FILE_PATH), sourceCode.getBytes());
+                return;
             }
-            logger.info("Instrumentation complete. Instrumented file written to: {}", outputPath);
+            String instrumentedSource = transformSource(sourceCode);
+            Files.write(Paths.get(OUTPUT_FILE_PATH), instrumentedSource.getBytes());
+            logger.info("Instrumentation complete. Instrumented file written to: {}", OUTPUT_FILE_PATH);
         } catch (Exception e) {
             logger.error("Instrumentation failed.", e);
         }
     }
 
     /**
-     * transformSource: Parse, visit, and transform the code, and update the main method.
-     * Forces the final code into the 'instrumentation' package.
+     * Parses and instruments the source code.
      */
     public static String transformSource(String sourceCode) {
         CompilationUnit cu = StaticJavaParser.parse(sourceCode);
-        // Force package to 'instrumentation'
+        // Force package to "instrumentation"
         cu.setPackageDeclaration("instrumentation");
         InstrumentationInserter inserter = new InstrumentationInserter();
         inserter.visit(cu, null);
-        // Update the main method: rename parameter to "args" if needed, and update input_1 initializer.
-        updateMainMethod(cu);
+        // Optionally add a marker comment at the beginning.
+        cu.addOrphanComment(new com.github.javaparser.ast.comments.LineComment(INSTRUMENTATION_MARKER));
         return cu.toString();
-    }
-
-    /**
-     * Updates the main method so that:
-     * 1. The parameter is renamed to "args" (if it isn’t already), and
-     * 2. The declaration for input_1 is replaced with:
-     *    int input_1 = (args.length > 0) ? Integer.parseInt(args[0]) : 4;
-     */
-    private static void updateMainMethod(CompilationUnit cu) {
-        cu.findAll(MethodDeclaration.class).stream()
-                .filter(md -> md.getNameAsString().equals("main"))
-                .forEach(md -> {
-                    // Rename the first parameter to "args" if needed.
-                    if (!md.getParameters().isEmpty() && !md.getParameter(0).getNameAsString().equals("args")) {
-                        md.getParameter(0).setName("args");
-                    }
-                    // Update input_1 initializer.
-                    md.getBody().ifPresent(body -> {
-                        for (Statement stmt : body.getStatements()) {
-                            if (stmt.isExpressionStmt() &&
-                                    stmt.asExpressionStmt().getExpression().isVariableDeclarationExpr()) {
-                                VariableDeclarationExpr vde = stmt.asExpressionStmt().getExpression().asVariableDeclarationExpr();
-                                vde.getVariables().forEach(vd -> {
-                                    if (vd.getNameAsString().equals("input_1")) {
-                                        vd.setInitializer(StaticJavaParser.parseExpression("(args.length > 0) ? Integer.parseInt(args[0]) : 4"));
-                                    }
-                                });
-                            }
-                        }
-                    });
-                });
     }
 
     /**
@@ -120,17 +84,22 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
     }
 
     /**
+     * Returns true if the given string already contains the instrumentation marker.
+     */
+    private boolean alreadyInstrumented(String nodeString) {
+        return nodeString.contains(INSTRUMENTATION_MARKER) || nodeString.contains("CollectOut.logVariable(");
+    }
+
+    /**
      * Checks if a variable with the given name is declared in the provided statements.
      */
     private boolean isDeclared(NodeList<Statement> statements, String varName) {
         for (Statement stmt : statements) {
-            if (stmt.isExpressionStmt()) {
-                ExpressionStmt exprStmt = stmt.asExpressionStmt();
-                if (exprStmt.getExpression().isVariableDeclarationExpr()) {
-                    for (VariableDeclarator vd : exprStmt.getExpression().asVariableDeclarationExpr().getVariables()) {
-                        if (vd.getNameAsString().equals(varName)) {
-                            return true;
-                        }
+            if (stmt.isExpressionStmt() && stmt.asExpressionStmt().getExpression().isVariableDeclarationExpr()) {
+                VariableDeclarationExpr vde = stmt.asExpressionStmt().getExpression().asVariableDeclarationExpr();
+                for (VariableDeclarator vd : vde.getVariables()) {
+                    if (vd.getNameAsString().equals(varName)) {
+                        return true;
                     }
                 }
             }
@@ -139,54 +108,121 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
     }
 
     /**
-     * Inserts a declaration for varName with type int and initializer 0 at the beginning
-     * of the enclosing method body if not already declared.
+     * Inserts a declaration for varName (of type int with initialiser 0) at the beginning of the enclosing method,
+     * if not already declared.
      */
     private void ensureDeclarationInMethod(MethodDeclaration methodDecl, String varName) {
+        Set<String> declared = instrumentedVars.computeIfAbsent(methodDecl, k -> new HashSet<>());
+        if (declared.contains(varName)) {
+            return;
+        }
         methodDecl.getBody().ifPresent(body -> {
             if (!isDeclared(body.getStatements(), varName)) {
-                VariableDeclarator vd = new VariableDeclarator(StaticJavaParser.parseType("int"), varName,
-                        StaticJavaParser.parseExpression("0"));
+                VariableDeclarator vd = new VariableDeclarator(
+                        StaticJavaParser.parseType("int"), varName, StaticJavaParser.parseExpression("0")
+                );
                 VariableDeclarationExpr decl = new VariableDeclarationExpr(vd);
                 body.addStatement(0, new ExpressionStmt(decl));
             }
         });
+        declared.add(varName);
     }
 
     /**
-     * Overrides the visit for BlockStmt to insert logging calls after each assignment.
+     * Override visit for MethodDeclaration.
+     * If the method body already contains a labeled statement with label "methodBody",
+     * then we assume this method is already instrumented and skip its children.
      */
     @Override
-    public Visitable visit(BlockStmt block, Void arg) {
-        super.visit(block, arg);
-        NodeList<Statement> newStatements = new NodeList<>();
-        MethodDeclaration methodDecl = block.findAncestor(MethodDeclaration.class).orElse(null);
+    public Visitable visit(MethodDeclaration md, Void arg) {
+        if (md.getBody().isPresent()) {
+            boolean alreadyInMethodBody = md.getBody().get().findFirst(LabeledStmt.class,
+                    ls -> "methodBody".equals(ls.getLabel().asString())).isPresent();
+            if (alreadyInMethodBody) {
+                return md;
+            }
+        }
+        return super.visit(md, arg);
+    }
 
-        for (Statement stmt : block.getStatements()) {
-            if (stmt.isExpressionStmt() && stmt.asExpressionStmt().getExpression().isAssignExpr()) {
-                AssignExpr ae = stmt.asExpressionStmt().getExpression().asAssignExpr();
-                if (ae.getTarget().isNameExpr()) {
-                    String varName = ae.getTarget().asNameExpr().getNameAsString();
+    /**
+     * Visitor for variable declarations: Inserts a logging call after each declaration,
+     * unless the node already appears instrumented.
+     */
+    @Override
+    public Visitable visit(VariableDeclarationExpr vde, Void arg) {
+        if (alreadyInstrumented(vde.toString())) {
+            return vde;
+        }
+        super.visit(vde, arg);
+        Statement parentStmt = vde.findAncestor(Statement.class).orElse(null);
+        if (parentStmt != null) {
+            BlockStmt block = parentStmt.findAncestor(BlockStmt.class).orElse(null);
+            if (block != null) {
+                int idx = block.getStatements().indexOf(parentStmt);
+                NodeList<Statement> newStatements = new NodeList<>();
+                newStatements.add(parentStmt);
+                MethodDeclaration methodDecl = block.findAncestor(MethodDeclaration.class).orElse(null);
+                for (VariableDeclarator varDecl : vde.getVariables()) {
+                    String varName = varDecl.getNameAsString();
                     if (methodDecl != null) {
                         ensureDeclarationInMethod(methodDecl, varName);
                     }
-                    newStatements.add(stmt);
                     MethodCallExpr logCall = createLogCall(varName);
                     newStatements.add(new ExpressionStmt(logCall));
-                    continue;
+                }
+                newStatements.get(0).setLineComment(INSTRUMENTATION_MARKER);
+                block.getStatements().remove(idx);
+                block.getStatements().addAll(idx, newStatements);
+            }
+        }
+        return vde;
+    }
+
+    /**
+     * Visitor for blocks: Inserts logging calls after assignment statements,
+     * unless they already appear instrumented.
+     */
+    @Override
+    public Visitable visit(BlockStmt block, Void arg) {
+        if (block.findAncestor(LabeledStmt.class)
+                .filter(ls -> "methodBody".equals(ls.getLabel().asString())).isPresent()) {
+            return block;
+        }
+        super.visit(block, arg);
+        NodeList<Statement> oldStatements = block.getStatements();
+        NodeList<Statement> newStatements = new NodeList<>();
+        MethodDeclaration methodDecl = block.findAncestor(MethodDeclaration.class).orElse(null);
+        for (Statement stmt : oldStatements) {
+            newStatements.add(stmt);
+            if (stmt.isExpressionStmt() && stmt.asExpressionStmt().getExpression().isAssignExpr()) {
+                String stmtStr = stmt.toString();
+                if (!alreadyInstrumented(stmtStr)) {
+                    AssignExpr ae = stmt.asExpressionStmt().getExpression().asAssignExpr();
+                    if (ae.getTarget().isNameExpr()) {
+                        String varName = ae.getTarget().asNameExpr().getNameAsString();
+                        if (methodDecl != null) {
+                            ensureDeclarationInMethod(methodDecl, varName);
+                        }
+                        MethodCallExpr logCall = createLogCall(varName);
+                        newStatements.add(new ExpressionStmt(logCall));
+                    }
                 }
             }
-            newStatements.add(stmt);
         }
         block.setStatements(newStatements);
         return block;
     }
 
     /**
-     * Overrides the visit for ConditionalExpr to lift subexpressions into temporary variables.
+     * Visitor for conditional expressions: Lifts subexpressions into temporary variables and inserts logging.
      */
     @Override
     public Visitable visit(ConditionalExpr ce, Void arg) {
+        if (alreadyInstrumented(ce.toString())) {
+            return ce;
+        }
+        
         Expression newCond = (Expression) ce.getCondition().accept(this, arg);
         Expression newThen = (Expression) ce.getThenExpr().accept(this, arg);
         Expression newElse = (Expression) ce.getElseExpr().accept(this, arg);
@@ -197,7 +233,7 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
         String tempCond = uniqueTemp("tempCond");
         String tempThen = uniqueTemp("tempThen");
         String tempElse = uniqueTemp("tempElse");
-        String tempResult = uniqueTemp("tempRes");
+        String tempRes = uniqueTemp("tempRes");
 
         VariableDeclarationExpr condDecl = new VariableDeclarationExpr(
                 new VariableDeclarator(StaticJavaParser.parseType("boolean"), tempCond, newCond.clone())
@@ -208,41 +244,43 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
         VariableDeclarationExpr elseDecl = new VariableDeclarationExpr(
                 new VariableDeclarator(StaticJavaParser.parseType("int"), tempElse, newElse.clone())
         );
-
         MethodCallExpr logCond = createLogCall(tempCond);
         MethodCallExpr logThen = createLogCall(tempThen);
         MethodCallExpr logElse = createLogCall(tempElse);
 
         ConditionalExpr newCondExpr = new ConditionalExpr(
-                new NameExpr(tempCond),
-                new NameExpr(tempThen),
-                new NameExpr(tempElse)
+                new NameExpr(tempCond), new NameExpr(tempThen), new NameExpr(tempElse)
         );
-
         VariableDeclarationExpr resultDecl = new VariableDeclarationExpr(
-                new VariableDeclarator(new PrimitiveType(PrimitiveType.Primitive.INT), tempResult, newCondExpr)
+                new VariableDeclarator(new PrimitiveType(PrimitiveType.Primitive.INT), tempRes, newCondExpr)
         );
-        MethodCallExpr logResult = createLogCall(tempResult);
+        MethodCallExpr logResult = createLogCall(tempRes);
 
-        BlockStmt parentBlock = ce.findAncestor(BlockStmt.class).orElse(new BlockStmt());
-        AtomicInteger indexHolder = new AtomicInteger(parentBlock.getStatements().size());
-        ce.findAncestor(ExpressionStmt.class).ifPresent(exprStmt ->
-                indexHolder.set(parentBlock.getStatements().indexOf(exprStmt))
-        );
-        parentBlock.addStatement(indexHolder.get(), new ExpressionStmt(condDecl));
-        parentBlock.addStatement(indexHolder.get() + 1, new ExpressionStmt(logCond));
-        parentBlock.addStatement(indexHolder.get() + 2, new ExpressionStmt(thenDecl));
-        parentBlock.addStatement(indexHolder.get() + 3, new ExpressionStmt(logThen));
-        parentBlock.addStatement(indexHolder.get() + 4, new ExpressionStmt(elseDecl));
-        parentBlock.addStatement(indexHolder.get() + 5, new ExpressionStmt(logElse));
-        parentBlock.addStatement(indexHolder.get() + 6, new ExpressionStmt(resultDecl));
-        parentBlock.addStatement(indexHolder.get() + 7, new ExpressionStmt(logResult));
+        BlockStmt parentBlock = ce.findAncestor(BlockStmt.class).orElse(null);
+        if (parentBlock != null) {
+            int insertIndex = 0;
+            if (ce.findAncestor(ExpressionStmt.class).isPresent()) {
+                ExpressionStmt parent = ce.findAncestor(ExpressionStmt.class).get();
+                insertIndex = parentBlock.getStatements().indexOf(parent);
+                if (insertIndex < 0) insertIndex = 0;
+            }
+            
+            parentBlock.addStatement(insertIndex, new ExpressionStmt(condDecl));
+            parentBlock.addStatement(insertIndex + 1, new ExpressionStmt(logCond));
+            parentBlock.addStatement(insertIndex + 2, new ExpressionStmt(thenDecl));
+            parentBlock.addStatement(insertIndex + 3, new ExpressionStmt(logThen));
+            parentBlock.addStatement(insertIndex + 4, new ExpressionStmt(elseDecl));
+            parentBlock.addStatement(insertIndex + 5, new ExpressionStmt(logElse));
+            parentBlock.addStatement(insertIndex + 6, new ExpressionStmt(resultDecl));
+            parentBlock.addStatement(insertIndex + 7, new ExpressionStmt(logResult));
+            parentBlock.getStatement(insertIndex).setLineComment(INSTRUMENTATION_MARKER);
+        }
 
-        return new NameExpr(tempResult);
+        return new NameExpr(tempRes);
     }
 
     /**
-     * Creates a logging call expression: CollectOut.logVariable("varName", varName).
+     * Creates a logging call: CollectOut.logVariable("varName", varName).
      */
     private MethodCallExpr createLogCall(String varName) {
         MethodCallExpr logCall = new MethodCallExpr(new NameExpr("CollectOut"), "logVariable");
@@ -251,5 +289,94 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
         args.add(new NameExpr(varName));
         logCall.setArguments(args);
         return logCall;
+    }
+
+    // SingleExitTransformer: Convert non-void methods to single-exit form.
+    public static class SingleExitTransformer extends ModifierVisitor<Void> {
+        @Override
+        public Visitable visit(MethodDeclaration md, Void arg) {
+            if (md.getType().isVoidType() || !md.getBody().isPresent()) {
+                return super.visit(md, arg);
+            }
+            BlockStmt originalBody = md.getBody().get();
+            String exitVar = "_exit";
+            VariableDeclarationExpr exitDecl = new VariableDeclarationExpr(md.getType(), exitVar);
+            LabeledStmt labeledBody = new LabeledStmt("methodBody", originalBody);
+            originalBody.accept(new ReturnReplacer(exitVar, "methodBody"), null);
+            BlockStmt newBody = new BlockStmt();
+            newBody.addStatement(exitDecl);
+            newBody.addStatement(labeledBody);
+            newBody.addStatement(new ReturnStmt(new NameExpr(exitVar)));
+            md.setBody(newBody);
+            return md;
+        }
+    }
+
+    private static class ReturnReplacer extends ModifierVisitor<Void> {
+        private final String exitVar;
+        private final String label;
+        public ReturnReplacer(String exitVar, String label) {
+            this.exitVar = exitVar;
+            this.label = label;
+        }
+        @Override
+        public Visitable visit(ReturnStmt rs, Void arg) {
+            List<Statement> replacement = new ArrayList<>();
+            if (rs.getExpression().isPresent()) {
+                Expression expr = rs.getExpression().get();
+                AssignExpr assign = new AssignExpr(new NameExpr(exitVar), expr, AssignExpr.Operator.ASSIGN);
+                replacement.add(new ExpressionStmt(assign));
+            }
+            replacement.add(new BreakStmt(label));
+            return new BlockStmt(new NodeList<>(replacement));
+        }
+    }
+
+    public static class WhileLoopConditionFixer extends ModifierVisitor<Void> {
+        @Override
+        public Visitable visit(WhileStmt ws, Void arg) {
+            return super.visit(ws, arg);
+        }
+    }
+
+    public static class ExpressionRewriter extends ModifierVisitor<Void> {
+        @Override
+        public Visitable visit(ConditionalExpr ce, Void arg) {
+            // Visit the children first
+            super.visit(ce, arg);
+            
+            // Create a unique temporary variable to hold the condition
+            String tempCond = "tempCond_" + System.currentTimeMillis();
+            
+            // Get the closest block statement
+            BlockStmt parentBlock = ce.findAncestor(BlockStmt.class).orElse(null);
+            
+            if (parentBlock != null) {
+                // Create a variable declaration for the condition
+                VariableDeclarationExpr condDecl = new VariableDeclarationExpr(
+                    new VariableDeclarator(
+                        StaticJavaParser.parseType("boolean"), 
+                        tempCond, 
+                        ce.getCondition().clone()
+                    )
+                );
+                
+                // Find an insertion point
+                int insertIndex = 0;
+                if (ce.findAncestor(ExpressionStmt.class).isPresent()) {
+                    ExpressionStmt parent = ce.findAncestor(ExpressionStmt.class).get();
+                    insertIndex = parentBlock.getStatements().indexOf(parent);
+                    if (insertIndex < 0) insertIndex = 0;
+                }
+                
+                // Insert the temporary variable declaration
+                parentBlock.addStatement(insertIndex, new ExpressionStmt(condDecl));
+                
+                // Replace the original condition with our temporary variable
+                ce.setCondition(new NameExpr(tempCond));
+            }
+            
+            return ce;
+        }
     }
 }
