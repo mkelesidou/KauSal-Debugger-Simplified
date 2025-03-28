@@ -8,26 +8,19 @@ import org.slf4j.LoggerFactory;
 import java.io.*;
 import java.util.*;
 
-/**
- * LogAggregator writes (X, T, Y) rows for UniVal analysis:
- *   - Covariates (X): the parent variables of T (loaded from a JSON file produced by ParentMapExtractor)
- *   - Treatment (T): the assigned variable name
- *   - TreatmentVal: the assigned variable's value
- *   - Outcome (Y): pass (1) or failure (0)
- *   - TestArgs: the test input used.
- *
- * Each row corresponds to one assignment.
- */
 public class LogAggregator {
     private static final Logger logger = LoggerFactory.getLogger(LogAggregator.class);
 
     // Hardcoded CSV output location.
-    private static final String CSV_FILE = "src/main/resources/logs/execution_data.csv";
+    private static final String CSV_FILE = "src/main/resources/logs/execution_data_buggy_example.csv";
     private static boolean headerWritten = false;
 
     // Hardcoded path to the parent map JSON produced by ParentMapExtractor.
-    private static final String PARENT_MAP_JSON = "src/main/resources/transformation/gsas/parentMap_simple_example.json";
+    private static final String PARENT_MAP_JSON = "src/main/resources/transformation/gsas/parentMap_buggy_example.json";
     private static Map<String, List<String>> parentMap = new HashMap<>();
+
+    // Fixed CSV header order.
+    private static final String[] CSV_HEADERS = {"TestArgs", "Covariates", "TreatmentVar", "TreatmentVal", "Outcome"};
 
     // Load the parent mapping when the class is loaded.
     static {
@@ -44,17 +37,15 @@ public class LogAggregator {
     // Resets the aggregator by deleting the CSV file.
     public static synchronized void reset() {
         File csvFile = new File(CSV_FILE);
-        if (csvFile.exists()) {
-            if (!csvFile.delete()) {
-                logger.error("Failed to delete existing CSV file: {}", CSV_FILE);
-            }
+        if (csvFile.exists() && !csvFile.delete()) {
+            logger.error("Failed to delete existing CSV file: {}", CSV_FILE);
         }
         headerWritten = false;
     }
 
     /**
-     * Aggregates the log lines for one test run into multiple CSV rows.
-     * Each row corresponds to one assignment.
+     * Aggregates the log lines for one test run into one CSV row per core treatment variable.
+     * Each row corresponds to the final occurrence (i.e. final assignment) of a treatment variable.
      *
      * @param testArgs The test input(s) as a string.
      * @param logLines The list of log lines from CollectOut for this test.
@@ -64,51 +55,46 @@ public class LogAggregator {
         // 1) Parse log lines into VarAssignment objects.
         List<VarAssignment> assignments = parseAssignments(logLines);
 
-        // 2) For each assignment, build a CSV row.
-        List<Map<String, Object>> rows = new ArrayList<>();
+        // 2) Filter out temporary instrumentation variables and debug log entries.
+        List<VarAssignment> coreAssignments = new ArrayList<>();
         for (VarAssignment va : assignments) {
-            // Retrieve parent variables for va.varName.
-            List<String> parents = getParentsOf(va.varName);
+            if (va.varName.startsWith("temp") || va.varName.endsWith("_debug"))
+                continue;
+            coreAssignments.add(va);
+        }
 
-            // For each parent, get the most recent logged value from assignments.
-            Map<String, Object> covariateMap = new LinkedHashMap<>();
+        // 3) Group by treatment variable and take the final occurrence (assuming log order is chronological).
+        Map<String, VarAssignment> finalAssignments = new LinkedHashMap<>();
+        for (VarAssignment va : coreAssignments) {
+            finalAssignments.put(va.varName, va);
+        }
+
+        // 4) Build rows using fixed columns.
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (VarAssignment va : finalAssignments.values()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("TestArgs", testArgs);
+            // Build covariates string from parent map.
+            List<String> parents = getParentsOf(va.varName);
+            StringBuilder covSb = new StringBuilder();
             for (String p : parents) {
                 String val = findMostRecentValue(assignments, p);
-                // Fallback: if the parent's value is not logged and the parent's name is "x_0",
-                // try to extract it from the test arguments.
-                if (val == null && p.equals("x_0")) {
-                    String clean = testArgs.replace("[", "").replace("]", "").trim();
-                    if (!clean.isEmpty()) {
-                        val = clean.split(",")[0].trim();
-                    }
-                }
                 if (val == null) {
                     val = "N/A";
                 }
-                covariateMap.put(p, val);
-            }
-
-            // Build the CSV row.
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("TestArgs", testArgs);
-
-            // Format covariates as "name=value" pairs separated by semicolons.
-            StringBuilder covSb = new StringBuilder();
-            for (Map.Entry<String, Object> entry : covariateMap.entrySet()) {
                 if (covSb.length() > 0) {
                     covSb.append(";");
                 }
-                covSb.append(entry.getKey()).append("=").append(entry.getValue());
+                covSb.append(p).append("=").append(val);
             }
             row.put("Covariates", covSb.toString());
             row.put("TreatmentVar", va.varName);
             row.put("TreatmentVal", va.value);
             row.put("Outcome", outcome);
-
             rows.add(row);
         }
 
-        // 3) Write rows to CSV.
+        // 5) Write rows to CSV.
         writeRowsToCsv(rows);
     }
 
@@ -160,7 +146,21 @@ public class LogAggregator {
     }
 
     /**
-     * Writes the given rows to the CSV file, writing the header only once.
+     * Escapes a field for CSV output. Encloses the field in double quotes if it contains a comma or a double quote.
+     */
+    private static String escapeCSV(String field) {
+        if (field == null) {
+            return "";
+        }
+        if (field.contains(",") || field.contains("\"") || field.contains("\n")) {
+            field = field.replace("\"", "\"\"");
+            return "\"" + field + "\"";
+        }
+        return field;
+    }
+
+    /**
+     * Writes the given rows to the CSV file using a fixed header order.
      */
     private static void writeRowsToCsv(List<Map<String, Object>> rows) {
         if (rows.isEmpty()) return;
@@ -173,18 +173,16 @@ public class LogAggregator {
              PrintWriter out = new PrintWriter(bw)) {
 
             if (!headerWritten) {
-                Map<String, Object> firstRow = rows.get(0);
-                String header = String.join(",", firstRow.keySet());
-                out.println(header);
+                out.println(String.join(",", CSV_HEADERS));
                 headerWritten = true;
             }
-            for (Map<String, Object> rowData : rows) {
+            for (Map<String, Object> row : rows) {
                 List<String> rowValues = new ArrayList<>();
-                for (Object value : rowData.values()) {
-                    rowValues.add(String.valueOf(value));
+                for (String key : CSV_HEADERS) {
+                    Object value = row.get(key);
+                    rowValues.add(escapeCSV(value != null ? String.valueOf(value) : ""));
                 }
-                String row = String.join(",", rowValues);
-                out.println(row);
+                out.println(String.join(",", rowValues));
             }
         } catch (IOException e) {
             logger.error("Error writing to CSV file", e);

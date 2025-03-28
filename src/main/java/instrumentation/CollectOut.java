@@ -10,7 +10,7 @@ public class CollectOut {
     private static final Logger logger = LoggerFactory.getLogger(CollectOut.class);
 
     private static final String DEFAULT_LOG_DIR = "src/main/resources/logs";
-    private static final String DEFAULT_LOG_FILE = "execution.log";
+    private static final String DEFAULT_LOG_FILE = "execution_buggy_example.log";
 
     // In-memory store: Each test’s log lines are grouped together.
     // We'll reset this store after each test so we can parse them as needed.
@@ -42,13 +42,13 @@ public class CollectOut {
             // Overwrite mode (append = false)
             writer = new BufferedWriter(new FileWriter(logFile, false));
         } catch (IOException e) {
-            logger.error("Failed to initialize log file: {}", e);
+            logger.error("Failed to initialise log file: {}", e);
         }
     }
 
     public static synchronized void logVariable(String varName, Object value) {
         String line = varName + " = " + value;
-        // Write to execution.log
+        // Write to execution_simple_example.log
         try {
             writer.write(line);
             writer.newLine();
