@@ -238,11 +238,30 @@ public class PredicateTransformer extends ModifierVisitor<Void> {
     }
 
     /**
-     * Main method to perform the predicate transformation on a sample source file.
+     * Main method to perform the predicate transformation on a source file.
      */
     public static void main(String[] args) throws Exception {
-        File sourceFile = new File("src/main/java/examples/BuggyExample.java");
-        File outputFile = new File("src/main/resources/transformation/predicates/transformed_buggy_example.java");
+        File sourceFile;
+        File outputFile;
+        
+        if (args.length >= 2) {
+            sourceFile = new File(args[0]);
+            outputFile = new File(args[1]);
+        } else if (args.length == 1) {
+            sourceFile = new File(args[0]);
+            String baseName = sourceFile.getName();
+            String outputName = "predicate_" + baseName;
+            outputFile = new File(sourceFile.getParent(), outputName);
+            System.out.println("No output path specified, using default: " + outputFile.getPath());
+        } else {
+            System.out.println("Usage: java PredicateTransformer <source_file> [<output_file>]");
+            System.out.println("Using default paths for testing purposes only.");
+            sourceFile = new File("src/main/java/examples/BuggyExample.java");
+            outputFile = new File("src/main/resources/transformation/predicates/transformed_buggy_example.java");
+        }
+        
+        System.out.println("Transforming predicates in: " + sourceFile.getPath());
         transformFile(sourceFile, outputFile);
+        System.out.println("Predicate transformation complete. Output written to: " + outputFile.getPath());
     }
 }

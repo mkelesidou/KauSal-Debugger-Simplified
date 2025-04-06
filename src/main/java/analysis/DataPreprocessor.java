@@ -42,8 +42,10 @@ import java.util.stream.Collectors;
  */
 public class DataPreprocessor {
     private static final Logger logger = LoggerFactory.getLogger(DataPreprocessor.class);
-    private static final String INPUT_CSV  = "src/main/resources/logs/execution_data_buggy_example.csv";
-    private static final String OUTPUT_CSV = "src/main/resources/datasets/preprocessed_data_buggy_example.csv";
+
+    // Default file paths to use if no command-line arguments are provided
+    private static final String DEFAULT_INPUT_CSV  = "src/main/resources/logs/execution_data_buggy_example.csv";
+    private static final String DEFAULT_OUTPUT_CSV = "src/main/resources/datasets/preprocessed_data_buggy_example.csv";
 
     // Raw log row
     private static class RowData {
@@ -214,8 +216,29 @@ public class DataPreprocessor {
 
     public static void main(String[] args) {
         try {
+            String inputCsvPath;
+            String outputCsvPath;
+            
+            if (args.length >= 2) {
+                inputCsvPath = args[0];
+                outputCsvPath = args[1];
+            } else if (args.length == 1) {
+                inputCsvPath = args[0];
+                outputCsvPath = inputCsvPath.replace(".csv", "_preprocessed.csv")
+                        .replace(".log", "_preprocessed.csv");
+                logger.info("No output path specified, using default: {}", outputCsvPath);
+            } else {
+                logger.info("Usage: java DataPreprocessor <input_file> [<output_file>]");
+                logger.info("Using default paths for testing purposes only.");
+                inputCsvPath = DEFAULT_INPUT_CSV;
+                outputCsvPath = DEFAULT_OUTPUT_CSV;
+            }
+            
+            logger.info("Reading from: {}", inputCsvPath);
+            logger.info("Writing to: {}", outputCsvPath);
+            
             // Check if input file exists, create it if not
-            File inputFile = new File(INPUT_CSV);
+            File inputFile = new File(inputCsvPath);
             if (!inputFile.exists()) {
                 createSampleFile(inputFile);
                 logger.info("Created sample input file at: {}", inputFile.getAbsolutePath());
@@ -238,7 +261,7 @@ public class DataPreprocessor {
                     new StructField("Outcome", DataTypes.StringType)
             );
             csv.schema(schema);
-            DataFrame df = csv.read(new File(INPUT_CSV).getAbsolutePath());
+            DataFrame df = csv.read(inputFile.getAbsolutePath());
             if (df.schema().length() > 5) {
                 df = df.select("TestArgs", "Covariates", "TreatmentVar", "TreatmentVal", "Outcome");
             }
@@ -384,7 +407,7 @@ public class DataPreprocessor {
 
             // Create and write final DataFrame
             DataFrame finalDf = DataFrame.of(finalCols.toArray(new BaseVector[0]));
-            writeCsvManually(finalDf, OUTPUT_CSV);
+            writeCsvManually(finalDf, outputCsvPath);
 
             // Log summary of processing
             logger.info("Processing complete:");
@@ -400,7 +423,7 @@ public class DataPreprocessor {
                        treatmentGroups.keySet().stream()
                            .filter(k -> !isTreatmentNumeric.get(k))
                            .collect(Collectors.toList()));
-            logger.info("  - Output written to: " + OUTPUT_CSV);
+            logger.info("  - Output written to: " + outputCsvPath);
 
         } catch (IOException | URISyntaxException e) {
             logger.error("Error: ", e);

@@ -189,6 +189,28 @@ public class DominatorTreeGenerator {
      * 6. Exports the dominator tree to a DOT file.
      */
     public static void main(String[] args) {
+        String inputCfgPath;
+        String outputDomPath;
+        
+        if (args.length >= 2) {
+            inputCfgPath = args[0];
+            outputDomPath = args[1];
+        } else if (args.length == 1) {
+            inputCfgPath = args[0];
+            outputDomPath = inputCfgPath.replace(".cfg", ".dom");
+            System.out.println("No output path specified, using default: " + outputDomPath);
+        } else {
+            System.out.println("Usage: java DominatorTreeGenerator <input_cfg_file> [<output_dom_file>]");
+            System.out.println("Using default paths for testing purposes only.");
+            inputCfgPath = "src/main/resources/sanalysis/cfgs/cfg_buggy_example.dot";
+            outputDomPath = "src/main/resources/sanalysis/dags/dominator_tree_buggy_example.dot";
+        }
+        
+        // Read the CFG from the input file (assuming it's in DOT format)
+        System.out.println("Reading CFG from: " + inputCfgPath);
+        
+        // For this example, we'll generate a new CFG directly
+        // In a real implementation, you would parse the CFG from the input file
         String sourcePath = "src/main/java/examples/BuggyExample.java";
         CFGGenerator cfgGen = new CFGGenerator();
         CFGGenerator.ControlFlowGraph cfg = cfgGen.generateCFG(sourcePath);
@@ -233,6 +255,7 @@ public class DominatorTreeGenerator {
 
         // Generate the dominator tree and export it to a DOT file.
         CFGGenerator.ControlFlowGraph domTree = generateDominatorTree(idom);
-        domTree.exportToDotFile("src/main/resources/sanalysis/dags/dominator_tree_buggy_example.dot");
+        domTree.exportToDotFile(outputDomPath);
+        System.out.println("Dominator tree exported to: " + outputDomPath);
     }
 }

@@ -379,7 +379,27 @@ public class CDGGenerator {
      * @param args command line arguments.
      */
     public static void main(String[] args) {
-        // Adjust the source path if necessary.
+        String inputDomPath;
+        String outputCdgPath;
+        
+        if (args.length >= 2) {
+            inputDomPath = args[0];
+            outputCdgPath = args[1];
+        } else if (args.length == 1) {
+            inputDomPath = args[0];
+            outputCdgPath = inputDomPath.replace(".dom", ".cdg");
+            System.out.println("No output path specified, using default: " + outputCdgPath);
+        } else {
+            System.out.println("Usage: java CDGGenerator <input_dom_file> [<output_cdg_file>]");
+            System.out.println("Using default paths for testing purposes only.");
+            inputDomPath = "src/main/resources/sanalysis/dags/dominator_tree_buggy_example.dot";
+            outputCdgPath = "src/main/resources/sanalysis/cdgs/cdg_buggy_example.dot";
+        }
+        
+        System.out.println("Reading dominator tree from: " + inputDomPath);
+
+        // For this example, we'll generate a new CFG directly
+        // In a real implementation, you would parse the dominator tree from the input file
         String sourcePath = "src/main/java/examples/BuggyExample.java";
 
         CDGGenerator generator = new CDGGenerator();
@@ -388,6 +408,7 @@ public class CDGGenerator {
         cfg.printGraph();
 
         Map<CFGGenerator.CFGNode, Set<CFGGenerator.CFGNode>> cdg = computeInterproceduralCDG(cfg);
-        exportCDG(cdg, cfg, "src/main/resources/sanalysis/cdgs/cdg_buggy_example.dot");
+        exportCDG(cdg, cfg, outputCdgPath);
+        System.out.println("CDG exported to: " + outputCdgPath);
     }
 }

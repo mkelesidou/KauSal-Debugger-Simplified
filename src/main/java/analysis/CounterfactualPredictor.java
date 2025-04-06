@@ -20,10 +20,15 @@ import java.util.*;
 public class CounterfactualPredictor {
     private static final Logger logger = LoggerFactory.getLogger(CounterfactualPredictor.class);
 
-    // File paths
-    private static String PROCESSED_DATASET = "src/main/resources/datasets/preprocessed_data_buggy_example.csv";
-    private static String MODELS_DIR = "src/main/resources/models/";
-    private static String OUTPUT_RANKING = "src/main/resources/results/suspiciousness_scores_buggy_example.csv";
+    // Default file paths to use if no command-line arguments are provided
+    private static String DEFAULT_PROCESSED_DATASET = "src/main/resources/datasets/preprocessed_data_buggy_example.csv";
+    private static String DEFAULT_MODELS_DIR = "src/main/resources/models/";
+    private static String DEFAULT_OUTPUT_RANKING = "src/main/resources/results/suspiciousness_scores_buggy_example.csv";
+
+    // Actual file paths to be set from command-line arguments
+    private static String processedDataset;
+    private static String modelsDir;
+    private static String outputRanking;
 
     // Column names - updated to match generic CSV column names (V1, V2, etc.)
     // Based on the CausalModelTrainer logs, the expected mapping is:
@@ -53,19 +58,47 @@ public class CounterfactualPredictor {
     }
 
     public static void main(String[] args) {
+        // Parse command-line arguments
         if (args.length >= 3) {
-            PROCESSED_DATASET = args[0];
-            MODELS_DIR = args[1];
-            OUTPUT_RANKING = args[2];
+            processedDataset = args[0];
+            modelsDir = args[1];
+            outputRanking = args[2];
+        } else if (args.length == 2) {
+            processedDataset = args[0];
+            modelsDir = args[1];
+            // Generate output file name based on input file
+            outputRanking = processedDataset.replace(".csv", "_suspiciousness.csv");
+            logger.info("No output path specified, using default: {}", outputRanking);
+        } else if (args.length == 1) {
+            processedDataset = args[0];
+            // Generate model dir and output file name based on input file
+            File inputFile = new File(processedDataset);
+            modelsDir = new File(inputFile.getParent()).getPath() + "/models/";
+            outputRanking = processedDataset.replace(".csv", "_suspiciousness.csv");
+            logger.info("No models directory and output path specified, using defaults:");
+            logger.info("Models Dir: {}", modelsDir);
+            logger.info("Output Ranking: {}", outputRanking);
         } else {
-            logger.info("Using default file paths:\nProcessed Dataset: {}\nModels Dir: {}\nOutput Ranking: {}",
-                    PROCESSED_DATASET, MODELS_DIR, OUTPUT_RANKING);
+            logger.info("Usage: java CounterfactualPredictor <preprocessed_data_file> [<models_dir> [<output_ranking>]]");
+            logger.info("Using default file paths for testing purposes only:");
+            processedDataset = DEFAULT_PROCESSED_DATASET;
+            modelsDir = DEFAULT_MODELS_DIR;
+            outputRanking = DEFAULT_OUTPUT_RANKING;
+            logger.info("Processed Dataset: {}", processedDataset);
+            logger.info("Models Dir: {}", modelsDir);
+            logger.info("Output Ranking: {}", outputRanking);
         }
 
         try {
+            // Create output directory if it doesn't exist
+            File outputDir = new File(new File(outputRanking).getParent());
+            if (!outputDir.exists()) {
+                outputDir.mkdirs();
+            }
+            
             // Load the preprocessed dataset
             CSV csv = new CSV();
-            DataFrame df = csv.read(new File(PROCESSED_DATASET).getAbsolutePath());
+            DataFrame df = csv.read(new File(processedDataset).getAbsolutePath());
             
             // Check DataFrame structure
             logger.info("DataFrame has {} rows and {} columns", df.size(), df.ncols());
@@ -200,7 +233,7 @@ public class CounterfactualPredictor {
                 }
                 
                 // Load the model
-                String modelPath = MODELS_DIR + "model_" + treatmentVar + ".model";
+                String modelPath = modelsDir + "model_" + treatmentVar + ".model";
                 File modelFile = new File(modelPath);
                 
                 if (!modelFile.exists()) {
@@ -258,8 +291,8 @@ public class CounterfactualPredictor {
             // Sort and write suspiciousness scores
             List<Map.Entry<String, Double>> sortedScores = new ArrayList<>(suspiciousnessMap.entrySet());
             sortedScores.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));
-            writeSuspiciousnessScores(sortedScores, OUTPUT_RANKING);
-            logger.info("Wrote suspiciousness ranking to {}", OUTPUT_RANKING);
+            writeSuspiciousnessScores(sortedScores, outputRanking);
+            logger.info("Wrote suspiciousness ranking to {}", outputRanking);
             
         } catch (Exception e) {
             logger.error("Error in CounterfactualPredictor: {}", e.getMessage(), e);

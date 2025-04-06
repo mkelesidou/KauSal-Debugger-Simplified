@@ -25,9 +25,9 @@ import smile.data.formula.Term;
 public class CausalModelTrainer {
     private static final Logger logger = LoggerFactory.getLogger(CausalModelTrainer.class);
 
-    // File paths
-    private static final String PREPROCESSED_CSV = "src/main/resources/datasets/preprocessed_data_buggy_example.csv";
-    private static final String MODELS_DIR = "src/main/resources/models/";
+    // Default file paths to use if no command-line arguments are provided
+    private static final String DEFAULT_PREPROCESSED_CSV = "src/main/resources/datasets/preprocessed_data_buggy_example.csv";
+    private static final String DEFAULT_MODELS_DIR = "src/main/resources/models/";
 
     // Column names in the CSV file
     private static final String[] COLUMN_NAMES = {
@@ -43,8 +43,28 @@ public class CausalModelTrainer {
 
     public static void main(String[] args) {
         try {
+            String preprocessedCsvPath;
+            String modelsDirPath;
+            
+            if (args.length >= 2) {
+                preprocessedCsvPath = args[0];
+                modelsDirPath = args[1];
+            } else if (args.length == 1) {
+                preprocessedCsvPath = args[0];
+                modelsDirPath = new File(preprocessedCsvPath).getParent() + "/models/";
+                logger.info("No models directory specified, using default: {}", modelsDirPath);
+            } else {
+                logger.info("Usage: java CausalModelTrainer <preprocessed_csv_file> [<models_directory>]");
+                logger.info("Using default paths for testing purposes only.");
+                preprocessedCsvPath = DEFAULT_PREPROCESSED_CSV;
+                modelsDirPath = DEFAULT_MODELS_DIR;
+            }
+            
+            logger.info("Reading preprocessed data from: {}", preprocessedCsvPath);
+            logger.info("Saving models to: {}", modelsDirPath);
+            
             // Get the absolute path to the CSV file
-            File csvFile = new File(PREPROCESSED_CSV);
+            File csvFile = new File(preprocessedCsvPath);
             if (!csvFile.exists()) {
                 logger.error("CSV file not found at: {}", csvFile.getAbsolutePath());
                 return;
@@ -172,8 +192,8 @@ public class CausalModelTrainer {
                                 };
                                 
                                 // Save the model using Java serialisation
-                                String modelFile = MODELS_DIR + "model_" + treatmentVar + ".model";
-                                File modelDir = new File(MODELS_DIR);
+                                String modelFile = modelsDirPath + "model_" + treatmentVar + ".model";
+                                File modelDir = new File(modelsDirPath);
                                 if (!modelDir.exists()) {
                                     modelDir.mkdirs();
                                 }
@@ -187,8 +207,8 @@ public class CausalModelTrainer {
                                 LogisticRegression model = LogisticRegression.fit(x, y);
                                 
                                 // Save the model using Java serialisation
-                                String modelFile = MODELS_DIR + "model_" + treatmentVar + ".model";
-                                File modelDir = new File(MODELS_DIR);
+                                String modelFile = modelsDirPath + "model_" + treatmentVar + ".model";
+                                File modelDir = new File(modelsDirPath);
                                 if (!modelDir.exists()) {
                                     modelDir.mkdirs();
                                 }

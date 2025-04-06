@@ -27,8 +27,9 @@ import java.util.*;
 public class InstrumentationInserter extends ModifierVisitor<Void> {
     private static final Logger logger = LoggerFactory.getLogger(InstrumentationInserter.class);
 
-    private static final String INPUT_FILE_PATH = "src/main/resources/transformation/gsas/transformed_buggy_example.java";
-    private static final String OUTPUT_FILE_PATH = "src/main/resources/instrumentation/BuggyExample.java";
+    // Default paths used only if no command-line arguments are provided
+    private static final String DEFAULT_INPUT_FILE_PATH = "src/main/resources/transformation/gsas/transformed_buggy_example.java";
+    private static final String DEFAULT_OUTPUT_FILE_PATH = "src/main/resources/instrumentation/BuggyExample.java";
 
     // Set to track unique temporary names.
     private final Set<String> usedNames = new HashSet<>();
@@ -41,17 +42,36 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
 
     public static void main(String[] args) {
         try {
-            String sourcePath = INPUT_FILE_PATH;
+            String sourcePath;
+            String outputPath;
+            
+            if (args.length >= 2) {
+                sourcePath = args[0];
+                outputPath = args[1];
+            } else if (args.length == 1) {
+                sourcePath = args[0];
+                outputPath = sourcePath.replace(".java", "_instrumented.java");
+                logger.info("No output path specified, using default: {}", outputPath);
+            } else {
+                logger.info("Usage: java InstrumentationInserter <source_file> [<output_file>]");
+                logger.info("Using default paths for testing purposes only.");
+                sourcePath = DEFAULT_INPUT_FILE_PATH;
+                outputPath = DEFAULT_OUTPUT_FILE_PATH;
+            }
+            
+            logger.info("Reading source from: {}", sourcePath);
             String sourceCode = new String(Files.readAllBytes(Paths.get(sourcePath)));
+            
             // If source already appears instrumented, skip instrumentation.
             if (sourceCode.contains("CollectOut.logVariable(")) {
                 logger.info("Source already instrumented. Skipping instrumentation.");
-                Files.write(Paths.get(OUTPUT_FILE_PATH), sourceCode.getBytes());
+                Files.write(Paths.get(outputPath), sourceCode.getBytes());
                 return;
             }
+            
             String instrumentedSource = transformSource(sourceCode);
-            Files.write(Paths.get(OUTPUT_FILE_PATH), instrumentedSource.getBytes());
-            logger.info("Instrumentation complete. Instrumented file written to: {}", OUTPUT_FILE_PATH);
+            Files.write(Paths.get(outputPath), instrumentedSource.getBytes());
+            logger.info("Instrumentation complete. Instrumented file written to: {}", outputPath);
         } catch (Exception e) {
             logger.error("Instrumentation failed.", e);
         }
@@ -172,8 +192,28 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
                     newStatements.add(new ExpressionStmt(logCall));
                 }
                 newStatements.get(0).setLineComment(INSTRUMENTATION_MARKER);
-                block.getStatements().remove(idx);
-                block.getStatements().addAll(idx, newStatements);
+                
+                // Clone the original statements to avoid concurrent modification
+                NodeList<Statement> blockStatements = new NodeList<>(block.getStatements());
+                
+                // Create a new list to replace the original statements
+                NodeList<Statement> replacementStatements = new NodeList<>();
+                
+                // Add all statements before the current one
+                for (int i = 0; i < idx; i++) {
+                    replacementStatements.add(blockStatements.get(i));
+                }
+                
+                // Add our new statements
+                replacementStatements.addAll(newStatements);
+                
+                // Add all statements after the current one
+                for (int i = idx + 1; i < blockStatements.size(); i++) {
+                    replacementStatements.add(blockStatements.get(i));
+                }
+                
+                // Set the modified statements all at once
+                block.setStatements(replacementStatements);
             }
         }
         return vde;
@@ -189,12 +229,20 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
                 .filter(ls -> "methodBody".equals(ls.getLabel().asString())).isPresent()) {
             return block;
         }
+        
+        // First visit all children
         super.visit(block, arg);
-        NodeList<Statement> oldStatements = block.getStatements();
+        
+        // Create a new list to avoid concurrent modification
+        NodeList<Statement> oldStatements = new NodeList<>(block.getStatements());
         NodeList<Statement> newStatements = new NodeList<>();
         MethodDeclaration methodDecl = block.findAncestor(MethodDeclaration.class).orElse(null);
+        
+        // Process all statements first and build the new list
         for (Statement stmt : oldStatements) {
             newStatements.add(stmt);
+            
+            // Check if we need to add instrumentation after this statement
             if (stmt.isExpressionStmt() && stmt.asExpressionStmt().getExpression().isAssignExpr()) {
                 String stmtStr = stmt.toString();
                 if (!alreadyInstrumented(stmtStr)) {
@@ -210,6 +258,8 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
                 }
             }
         }
+        
+        // Set the new list of statements all at once
         block.setStatements(newStatements);
         return block;
     }
@@ -223,6 +273,7 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
             return ce;
         }
         
+        // First visit and update children
         Expression newCond = (Expression) ce.getCondition().accept(this, arg);
         Expression newThen = (Expression) ce.getThenExpr().accept(this, arg);
         Expression newElse = (Expression) ce.getElseExpr().accept(this, arg);
@@ -230,11 +281,13 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
         ce.setThenExpr(newThen);
         ce.setElseExpr(newElse);
 
+        // Create temporary variables
         String tempCond = uniqueTemp("tempCond");
         String tempThen = uniqueTemp("tempThen");
         String tempElse = uniqueTemp("tempElse");
         String tempRes = uniqueTemp("tempRes");
 
+        // Create variable declarations and logging calls
         VariableDeclarationExpr condDecl = new VariableDeclarationExpr(
                 new VariableDeclarator(StaticJavaParser.parseType("boolean"), tempCond, newCond.clone())
         );
@@ -258,6 +311,7 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
 
         BlockStmt parentBlock = ce.findAncestor(BlockStmt.class).orElse(null);
         if (parentBlock != null) {
+            // Find the insertion index
             int insertIndex = 0;
             if (ce.findAncestor(ExpressionStmt.class).isPresent()) {
                 ExpressionStmt parent = ce.findAncestor(ExpressionStmt.class).get();
@@ -265,15 +319,34 @@ public class InstrumentationInserter extends ModifierVisitor<Void> {
                 if (insertIndex < 0) insertIndex = 0;
             }
             
-            parentBlock.addStatement(insertIndex, new ExpressionStmt(condDecl));
-            parentBlock.addStatement(insertIndex + 1, new ExpressionStmt(logCond));
-            parentBlock.addStatement(insertIndex + 2, new ExpressionStmt(thenDecl));
-            parentBlock.addStatement(insertIndex + 3, new ExpressionStmt(logThen));
-            parentBlock.addStatement(insertIndex + 4, new ExpressionStmt(elseDecl));
-            parentBlock.addStatement(insertIndex + 5, new ExpressionStmt(logElse));
-            parentBlock.addStatement(insertIndex + 6, new ExpressionStmt(resultDecl));
-            parentBlock.addStatement(insertIndex + 7, new ExpressionStmt(logResult));
-            parentBlock.getStatement(insertIndex).setLineComment(INSTRUMENTATION_MARKER);
+            // Create a new list of statements to avoid concurrent modification
+            NodeList<Statement> oldStatements = new NodeList<>(parentBlock.getStatements());
+            NodeList<Statement> newStatements = new NodeList<>();
+            
+            // Add statements before the insertion point
+            for (int i = 0; i < insertIndex; i++) {
+                newStatements.add(oldStatements.get(i));
+            }
+            
+            // Add our new instrumentation statements
+            ExpressionStmt condStmt = new ExpressionStmt(condDecl);
+            condStmt.setLineComment(INSTRUMENTATION_MARKER);
+            newStatements.add(condStmt);
+            newStatements.add(new ExpressionStmt(logCond));
+            newStatements.add(new ExpressionStmt(thenDecl));
+            newStatements.add(new ExpressionStmt(logThen));
+            newStatements.add(new ExpressionStmt(elseDecl));
+            newStatements.add(new ExpressionStmt(logElse));
+            newStatements.add(new ExpressionStmt(resultDecl));
+            newStatements.add(new ExpressionStmt(logResult));
+            
+            // Add remaining statements
+            for (int i = insertIndex; i < oldStatements.size(); i++) {
+                newStatements.add(oldStatements.get(i));
+            }
+            
+            // Update the block with the new statements
+            parentBlock.setStatements(newStatements);
         }
 
         return new NameExpr(tempRes);

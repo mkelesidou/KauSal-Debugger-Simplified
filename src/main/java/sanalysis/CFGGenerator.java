@@ -460,11 +460,27 @@ public class CFGGenerator {
 
 
     public static void main(String[] args) {
-        String sourcePath = "src/main/java/examples/BuggyExample.java";
+        String sourcePath;
+        String outputPath;
+        
+        if (args.length >= 2) {
+            sourcePath = args[0];
+            outputPath = args[1];
+        } else if (args.length == 1) {
+            sourcePath = args[0];
+            outputPath = sourcePath + ".cfg";
+            System.out.println("No output path specified, using default: " + outputPath);
+        } else {
+            System.out.println("Usage: java CFGGenerator <source_file> [<output_file>]");
+            System.out.println("Using default paths for testing purposes only.");
+            sourcePath = "src/main/java/examples/BuggyExample.java";
+            outputPath = "src/main/resources/sanalysis/cfgs/cfg_buggy_example.dot";
+        }
+        
         CFGGenerator generator = new CFGGenerator();
         ControlFlowGraph cfg = generator.generateCFG(sourcePath);
         System.out.println("Generated CFG:");
         cfg.printGraph();
-        cfg.exportToDotFile("src/main/resources/sanalysis/cfgs/cfg_buggy_example.dot");
+        cfg.exportToDotFile(outputPath);
     }
 }

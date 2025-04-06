@@ -35,6 +35,25 @@ public class GSATransformer {
 
     public static void main(String[] args) {
         try {
+            String sourcePath;
+            String outputPath;
+            
+            if (args.length >= 2) {
+                sourcePath = args[0];
+                outputPath = args[1];
+            } else if (args.length == 1) {
+                sourcePath = args[0];
+                outputPath = sourcePath.replace(".java", "_gsa.java");
+                System.out.println("No output path specified, using default: " + outputPath);
+            } else {
+                System.out.println("Usage: java GSATransformer <source_file> [<output_file>]");
+                System.out.println("Using default paths for testing purposes only.");
+                sourcePath = "src/main/resources/transformation/predicates/transformed_simple_example.java";
+                outputPath = "src/main/resources/transformation/gsas/transformed_simple_example.java";
+            }
+            
+            System.out.println("Transforming to GSA form: " + sourcePath);
+            
             // 1. Set up JavaParser with symbol solving.
             CombinedTypeSolver typeSolver = new CombinedTypeSolver();
             typeSolver.add(new ReflectionTypeSolver());
@@ -43,7 +62,6 @@ public class GSATransformer {
             StaticJavaParser.setConfiguration(config);
 
             // 2. Parse the predicate-transformed source file.
-            String sourcePath = "src/main/resources/transformation/predicates/transformed_simple_example.java";
             CompilationUnit cu = StaticJavaParser.parse(new File(sourcePath));
 
             // 3. Build the CFG.
@@ -93,11 +111,10 @@ public class GSATransformer {
             exprRewriter.visit(cu, null);
 
             // 12. Write the transformed source code to an output file.
-            String outputPath = "src/main/resources/transformation/gsas/transformed_simple_example.java";
             try (PrintWriter writer = new PrintWriter(new FileWriter(outputPath))) {
                 writer.println(cu.toString());
             }
-            System.out.println("Production-transformed code stored to " + outputPath);
+            System.out.println("GSA-transformed code stored to " + outputPath);
         } catch (Exception e) {
             e.printStackTrace();
             System.exit(1);
