@@ -1,6 +1,7 @@
 # Compiled class file
 *.class
 
+<<<<<<< HEAD
 # IntelliJ IDEA files
 .idea/
 *.iml
@@ -13,6 +14,8 @@ build/
 .DS_Store
 Thumbs.db
 
+=======
+>>>>>>> f64c262affc2e216ed10483217370fe5ff8cd6f9
 # Log file
 *.log
 
@@ -20,6 +23,7 @@ Thumbs.db
 *.ctxt
 
 # Mobile Tools for Java (J2ME)
+<<<<<<< HEAD
 .mtj
 .tmp/
 caches/
@@ -27,6 +31,11 @@ daemon/
 wrapper/
 # Package Files #
 *.txt
+=======
+.mtj.tmp/
+
+# Package Files #
+>>>>>>> f64c262affc2e216ed10483217370fe5ff8cd6f9
 *.jar
 *.war
 *.nar

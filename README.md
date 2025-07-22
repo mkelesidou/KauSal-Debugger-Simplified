@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # UniVal - A Trivial Implementation
 
 UniVal is a software causality analysis tool inspired by the original UniVal research, designed to identify suspicious variables in source code. This implementation provides a pipeline for log parsing, clustering, random forest training, counterfactual analysis, and suspiciousness ranking.
@@ -22,3 +23,7 @@ UniVal is a software causality analysis tool inspired by the original UniVal res
    ```bash
    git clone <repository_url>
    cd <repository_name>
+=======
+# DissertaKauSal-Debugger-Simplified
+Dissertation project 2024-25 - The University of Sheffield. Title: Inferring Software Causality from Source Code
+>>>>>>> f64c262affc2e216ed10483217370fe5ff8cd6f9
