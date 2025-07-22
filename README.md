@@ -22,7 +22,7 @@ KauSal is a software causality analysis tool inspired by the original UniVal res
    ```bash
    git clone <repository_url>
    cd <repository_name>
-=======
+
 # KauSal-Debugger-Simplified
 Dissertation project 2024-25 @ The University of Sheffield. 
 Title: Inferring Software Causality from Source Code
